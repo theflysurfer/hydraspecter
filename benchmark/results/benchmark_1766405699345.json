@@ -1,0 +1,113 @@
+{
+  "timestamp": "2025-12-22T12:14:59.345Z",
+  "baseline": {
+    "name": "baseline",
+    "humanize": false,
+    "results": {
+      "sites": {
+        "sannysoft": {
+          "passed": 7,
+          "failed": 1,
+          "total": 8
+        },
+        "intoli": {
+          "passed": 0,
+          "failed": 0
+        }
+      },
+      "webdriver": {}
+    },
+    "metrics": [
+      {
+        "name": "navigate_sannysoft",
+        "duration": 4277.340300000001,
+        "success": true
+      },
+      {
+        "name": "navigate_intoli",
+        "duration": 602.2213999999985,
+        "success": true
+      },
+      {
+        "name": "navigate_google",
+        "duration": 1737.6111999999994,
+        "success": true
+      },
+      {
+        "name": "type_instant",
+        "duration": 89.6207000000013,
+        "success": true
+      },
+      {
+        "name": "scroll_instant",
+        "duration": 121.3776999999991,
+        "success": true
+      }
+    ],
+    "summary": {
+      "totalTime": 15108.871,
+      "actionCount": 5,
+      "avgActionTime": 1365.6342599999998,
+      "actionsPerSecond": 0.3309314110895513,
+      "successRate": 1,
+      "webdriverDetected": false
+    }
+  },
+  "humanized": {
+    "name": "humanized",
+    "humanize": true,
+    "results": {
+      "sites": {
+        "sannysoft": {
+          "passed": 7,
+          "failed": 1,
+          "total": 8
+        },
+        "intoli": {
+          "passed": 0,
+          "failed": 0
+        }
+      },
+      "webdriver": {}
+    },
+    "metrics": [
+      {
+        "name": "navigate_sannysoft",
+        "duration": 7650.211299999999,
+        "success": true
+      },
+      {
+        "name": "navigate_intoli",
+        "duration": 577.8845999999976,
+        "success": true
+      },
+      {
+        "name": "navigate_google",
+        "duration": 1533.6861999999965,
+        "success": true
+      },
+      {
+        "name": "type_humanized",
+        "duration": 8513.0622,
+        "success": true
+      },
+      {
+        "name": "scroll_humanized",
+        "duration": 929.4868999999962,
+        "success": true
+      }
+    ],
+    "summary": {
+      "totalTime": 32450.204899999997,
+      "actionCount": 5,
+      "avgActionTime": 3840.866239999998,
+      "actionsPerSecond": 0.15408223200464294,
+      "successRate": 1,
+      "webdriverDetected": false
+    }
+  },
+  "comparison": {
+    "timeOverheadPercent": 114.77584195404145,
+    "tokenEfficiencyRatio": 2.147758419540414
+  }
+}
