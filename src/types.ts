@@ -64,11 +64,34 @@ export interface ClickOptions {
   clickCount?: number;
   delay?: number;
   timeout?: number;
+  humanize?: boolean;  // Use human-like mouse movement
 }
 
 export interface TypeOptions {
   delay?: number;
   timeout?: number;
+  humanize?: boolean;  // Use human-like typing with typos
+}
+
+export interface ScrollOptions {
+  amount?: number;
+  direction?: 'up' | 'down' | 'top' | 'bottom';
+  selector?: string;  // Optional: scroll to bring this element into view
+  humanize?: boolean;  // Use physics-based scrolling
+  timeout?: number;
+}
+
+export interface HumanizeConfig {
+  /** Enable human-like mouse movement */
+  mouse?: boolean;
+  /** Enable human-like typing with typos */
+  typing?: boolean;
+  /** Enable physics-based scrolling */
+  scroll?: boolean;
+  /** Typo rate for typing (0-1) */
+  typoRate?: number;
+  /** Mouse overshoot probability (0-1) */
+  overshootChance?: number;
 }
 
 export interface ScreenshotOptions {

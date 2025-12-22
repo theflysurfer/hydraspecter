@@ -1,12 +1,16 @@
 import { Tool } from '@modelcontextprotocol/sdk/types.js';
 import { BrowserManager } from './browser-manager.js';
-import { 
-  ToolResult, 
-  NavigationOptions, 
-  ClickOptions, 
-  TypeOptions, 
-  ScreenshotOptions
+import {
+  ToolResult,
+  NavigationOptions,
+  ClickOptions,
+  TypeOptions,
+  ScreenshotOptions,
+  ScrollOptions
 } from './types.js';
+import { humanClick } from './utils/ghost-cursor.js';
+import { humanType, humanTypeInElement } from './utils/human-typing.js';
+import { humanScrollDown, humanScrollUp, humanScrollToElement, humanScrollToTop, humanScrollToBottom } from './utils/human-scroll.js';
 
 export class BrowserTools {
   constructor(private browserManager: BrowserManager) {}
@@ -219,6 +223,11 @@ export class BrowserTools {
               type: 'number',
               description: 'Timeout in milliseconds',
               default: 30000
+            },
+            humanize: {
+              type: 'boolean',
+              description: 'Use human-like mouse movement with Bezier curves and Fitts\' Law timing',
+              default: false
             }
           },
           required: ['instanceId', 'selector']
@@ -251,6 +260,11 @@ export class BrowserTools {
               type: 'number',
               description: 'Timeout in milliseconds',
               default: 30000
+            },
+            humanize: {
+              type: 'boolean',
+              description: 'Use human-like typing with random delays (30-150ms) and occasional typos (~2%)',
+              default: false
             }
           },
           required: ['instanceId', 'selector', 'text']
@@ -278,6 +292,11 @@ export class BrowserTools {
               type: 'number',
               description: 'Timeout in milliseconds',
               default: 30000
+            },
+            humanize: {
+              type: 'boolean',
+              description: 'Use human-like typing with random delays and occasional typos',
+              default: false
             }
           },
           required: ['instanceId', 'selector', 'value']
@@ -308,6 +327,45 @@ export class BrowserTools {
             }
           },
           required: ['instanceId', 'selector', 'value']
+        }
+      },
+      {
+        name: 'browser_scroll',
+        description: 'Scroll the page with optional human-like physics (momentum, overshoot, micro-pauses)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID'
+            },
+            direction: {
+              type: 'string',
+              enum: ['up', 'down', 'top', 'bottom'],
+              description: 'Scroll direction: up/down for relative scroll, top/bottom for absolute',
+              default: 'down'
+            },
+            amount: {
+              type: 'number',
+              description: 'Amount to scroll in pixels (for up/down directions)',
+              default: 300
+            },
+            selector: {
+              type: 'string',
+              description: 'Optional: scroll to bring this element into view'
+            },
+            humanize: {
+              type: 'boolean',
+              description: 'Use physics-based scrolling with momentum, overshoot, and micro-pauses',
+              default: false
+            },
+            timeout: {
+              type: 'number',
+              description: 'Timeout in milliseconds',
+              default: 30000
+            }
+          },
+          required: ['instanceId']
         }
       },
 
@@ -631,20 +689,34 @@ export class BrowserTools {
             button: args.button || 'left',
             clickCount: args.clickCount || 1,
             delay: args.delay || 0,
-            timeout: args.timeout || 30000
+            timeout: args.timeout || 30000,
+            humanize: args.humanize || false
           });
 
         case 'browser_type':
           return await this.type(args.instanceId, args.selector, args.text, {
             delay: args.delay || 0,
-            timeout: args.timeout || 30000
+            timeout: args.timeout || 30000,
+            humanize: args.humanize || false
           });
 
         case 'browser_fill':
-          return await this.fill(args.instanceId, args.selector, args.value, args.timeout || 30000);
+          return await this.fill(args.instanceId, args.selector, args.value, {
+            timeout: args.timeout || 30000,
+            humanize: args.humanize || false
+          });
 
         case 'browser_select_option':
           return await this.selectOption(args.instanceId, args.selector, args.value, args.timeout || 30000);
+
+        case 'browser_scroll':
+          return await this.scroll(args.instanceId, {
+            direction: args.direction || 'down',
+            amount: args.amount || 300,
+            selector: args.selector,
+            humanize: args.humanize || false,
+            timeout: args.timeout || 30000
+          });
 
         case 'browser_get_page_info':
           return await this.getPageInfo(args.instanceId);
@@ -803,6 +875,17 @@ export class BrowserTools {
     }
 
     try {
+      if (options.humanize) {
+        // Use human-like mouse movement with Bezier curves
+        await humanClick(instance.page, selector);
+        return {
+          success: true,
+          data: { selector, clicked: true, humanized: true },
+          instanceId
+        };
+      }
+
+      // Standard click
       const clickOptions: any = {
         button: options.button
       };
@@ -831,6 +914,17 @@ export class BrowserTools {
     }
 
     try {
+      if (options.humanize) {
+        // Use human-like typing with delays and occasional typos
+        await humanTypeInElement(instance.page, selector, text);
+        return {
+          success: true,
+          data: { selector, text, typed: true, humanized: true },
+          instanceId
+        };
+      }
+
+      // Standard typing
       const typeOptions: any = {};
       if (options.delay) typeOptions.delay = options.delay;
       if (options.timeout) typeOptions.timeout = options.timeout;
@@ -849,14 +943,28 @@ export class BrowserTools {
     }
   }
 
-  private async fill(instanceId: string, selector: string, value: string, timeout: number): Promise<ToolResult> {
+  private async fill(instanceId: string, selector: string, value: string, options: { timeout: number; humanize?: boolean }): Promise<ToolResult> {
     const instance = this.browserManager.getInstance(instanceId);
     if (!instance) {
       return { success: false, error: `Instance ${instanceId} not found` };
     }
 
     try {
-      await instance.page.fill(selector, value, { timeout });
+      if (options.humanize) {
+        // Clear field first, then use human-like typing
+        await instance.page.click(selector);
+        await instance.page.keyboard.press('Control+a');
+        await instance.page.keyboard.press('Backspace');
+        await humanType(instance.page, value);
+        return {
+          success: true,
+          data: { selector, value, filled: true, humanized: true },
+          instanceId
+        };
+      }
+
+      // Standard fill (instant)
+      await instance.page.fill(selector, value, { timeout: options.timeout });
       return {
         success: true,
         data: { selector, value, filled: true },
@@ -888,6 +996,90 @@ export class BrowserTools {
       return {
         success: false,
         error: `Select option failed: ${error instanceof Error ? error.message : error}`,
+        instanceId
+      };
+    }
+  }
+
+  private async scroll(instanceId: string, options: ScrollOptions): Promise<ToolResult> {
+    const instance = this.browserManager.getInstance(instanceId);
+    if (!instance) {
+      return { success: false, error: `Instance ${instanceId} not found` };
+    }
+
+    try {
+      const direction = options.direction || 'down';
+      const amount = options.amount || 300;
+
+      // If selector provided, scroll to element
+      if (options.selector) {
+        if (options.humanize) {
+          await humanScrollToElement(instance.page, options.selector);
+        } else {
+          await instance.page.locator(options.selector).scrollIntoViewIfNeeded({ timeout: options.timeout });
+        }
+        return {
+          success: true,
+          data: { scrolledTo: options.selector, humanized: options.humanize || false },
+          instanceId
+        };
+      }
+
+      // Direction-based scrolling
+      if (options.humanize) {
+        switch (direction) {
+          case 'up':
+            await humanScrollUp(instance.page, amount);
+            break;
+          case 'down':
+            await humanScrollDown(instance.page, amount);
+            break;
+          case 'top':
+            await humanScrollToTop(instance.page);
+            break;
+          case 'bottom':
+            await humanScrollToBottom(instance.page);
+            break;
+        }
+      } else {
+        // Standard instant scroll
+        switch (direction) {
+          case 'up':
+            await instance.page.evaluate((amt) => window.scrollBy(0, -amt), amount);
+            break;
+          case 'down':
+            await instance.page.evaluate((amt) => window.scrollBy(0, amt), amount);
+            break;
+          case 'top':
+            await instance.page.evaluate(() => window.scrollTo(0, 0));
+            break;
+          case 'bottom':
+            await instance.page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+            break;
+        }
+      }
+
+      // Get final scroll position
+      const scrollPosition = await instance.page.evaluate(() => ({
+        x: window.scrollX,
+        y: window.scrollY,
+        maxY: document.documentElement.scrollHeight - window.innerHeight
+      }));
+
+      return {
+        success: true,
+        data: {
+          direction,
+          amount: direction === 'top' || direction === 'bottom' ? null : amount,
+          humanized: options.humanize || false,
+          scrollPosition
+        },
+        instanceId
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Scroll failed: ${error instanceof Error ? error.message : error}`,
         instanceId
       };
     }
