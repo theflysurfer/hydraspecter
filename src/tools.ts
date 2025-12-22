@@ -6,14 +6,31 @@ import {
   ClickOptions,
   TypeOptions,
   ScreenshotOptions,
-  ScrollOptions
+  ScrollOptions,
+  HumanizeConfig
 } from './types.js';
 import { humanClick } from './utils/ghost-cursor.js';
 import { humanType, humanTypeInElement } from './utils/human-typing.js';
 import { humanScrollDown, humanScrollUp, humanScrollToElement, humanScrollToTop, humanScrollToBottom } from './utils/human-scroll.js';
 
 export class BrowserTools {
-  constructor(private browserManager: BrowserManager) {}
+  private humanizeConfig: HumanizeConfig;
+
+  constructor(private browserManager: BrowserManager, humanizeConfig?: HumanizeConfig) {
+    this.humanizeConfig = humanizeConfig || {};
+  }
+
+  /**
+   * Check if humanize should be enabled for a specific action
+   */
+  private shouldHumanize(actionType: 'mouse' | 'typing' | 'scroll', explicitValue?: boolean): boolean {
+    // If explicitly set in the request, use that value
+    if (explicitValue !== undefined) {
+      return explicitValue;
+    }
+    // Otherwise, check global config
+    return this.humanizeConfig[actionType] || false;
+  }
 
   /**
    * Get all tool definitions
@@ -875,7 +892,7 @@ export class BrowserTools {
     }
 
     try {
-      if (options.humanize) {
+      if (this.shouldHumanize('mouse', options.humanize)) {
         // Use human-like mouse movement with Bezier curves
         await humanClick(instance.page, selector);
         return {
@@ -914,7 +931,7 @@ export class BrowserTools {
     }
 
     try {
-      if (options.humanize) {
+      if (this.shouldHumanize('typing', options.humanize)) {
         // Use human-like typing with delays and occasional typos
         await humanTypeInElement(instance.page, selector, text);
         return {
@@ -950,7 +967,7 @@ export class BrowserTools {
     }
 
     try {
-      if (options.humanize) {
+      if (this.shouldHumanize('typing', options.humanize)) {
         // Clear field first, then use human-like typing
         await instance.page.click(selector);
         await instance.page.keyboard.press('Control+a');
@@ -1011,22 +1028,24 @@ export class BrowserTools {
       const direction = options.direction || 'down';
       const amount = options.amount || 300;
 
+      const useHumanScroll = this.shouldHumanize('scroll', options.humanize);
+
       // If selector provided, scroll to element
       if (options.selector) {
-        if (options.humanize) {
+        if (useHumanScroll) {
           await humanScrollToElement(instance.page, options.selector);
         } else {
           await instance.page.locator(options.selector).scrollIntoViewIfNeeded({ timeout: options.timeout });
         }
         return {
           success: true,
-          data: { scrolledTo: options.selector, humanized: options.humanize || false },
+          data: { scrolledTo: options.selector, humanized: useHumanScroll },
           instanceId
         };
       }
 
       // Direction-based scrolling
-      if (options.humanize) {
+      if (useHumanScroll) {
         switch (direction) {
           case 'up':
             await humanScrollUp(instance.page, amount);
@@ -1071,7 +1090,7 @@ export class BrowserTools {
         data: {
           direction,
           amount: direction === 'top' || direction === 'bottom' ? null : amount,
-          humanized: options.humanize || false,
+          humanized: useHumanScroll,
           scrollPosition
         },
         instanceId

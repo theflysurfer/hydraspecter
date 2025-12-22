@@ -45,6 +45,7 @@ export interface ServerConfig {
   instanceTimeout: number; // in milliseconds
   cleanupInterval: number; // in milliseconds
   proxy?: ProxyConfig; // Global proxy configuration
+  humanize?: HumanizeConfig; // Global humanize defaults
 }
 
 export interface ToolResult {

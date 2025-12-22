@@ -30,7 +30,7 @@ export class ConcurrentBrowserServer {
     );
 
     this.browserManager = new BrowserManager(config);
-    this.browserTools = new BrowserTools(this.browserManager);
+    this.browserTools = new BrowserTools(this.browserManager, config.humanize);
 
     this.setupHandlers();
   }

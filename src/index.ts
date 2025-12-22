@@ -28,6 +28,11 @@ program
   .option('--bypass-csp', 'Bypass CSP', false)
   .option('--proxy <string>', 'Proxy server (e.g., http://127.0.0.1:7890)')
   .option('--no-proxy-auto-detect', 'Disable automatic proxy detection')
+  .option('--humanize', 'Enable all human-like behaviors by default (mouse, typing, scroll)')
+  .option('--humanize-mouse', 'Enable human-like mouse movement by default')
+  .option('--humanize-typing', 'Enable human-like typing by default')
+  .option('--humanize-scroll', 'Enable human-like scrolling by default')
+  .option('--typo-rate <number>', 'Typo rate for human typing (0-1)', (value) => parseFloat(value), 0.02)
   .action(async (options) => {
     // Build configuration
     // Determine viewport: null for natural, or specified dimensions
@@ -55,6 +60,12 @@ program
       proxy: {
         server: options.proxy,
         autoDetect: options.proxyAutoDetect !== false, // Enable by default unless explicitly disabled
+      },
+      humanize: {
+        mouse: options.humanize || options.humanizeMouse || false,
+        typing: options.humanize || options.humanizeTyping || false,
+        scroll: options.humanize || options.humanizeScroll || false,
+        typoRate: options.typoRate,
       },
     };
 
@@ -85,6 +96,19 @@ program
       } else {
         console.error(chalk.gray('Proxy: Disabled'));
       }
+
+      // Display humanize configuration
+      const humanizeEnabled = config.humanize?.mouse || config.humanize?.typing || config.humanize?.scroll;
+      if (humanizeEnabled) {
+        const enabledFeatures: string[] = [];
+        if (config.humanize?.mouse) enabledFeatures.push('mouse');
+        if (config.humanize?.typing) enabledFeatures.push('typing');
+        if (config.humanize?.scroll) enabledFeatures.push('scroll');
+        console.error(chalk.green(`Humanize: ${enabledFeatures.join(', ')} (anti-detection)`));
+        if (config.humanize?.typoRate && config.humanize.typoRate !== 0.02) {
+          console.error(chalk.gray(`  Typo rate: ${(config.humanize.typoRate * 100).toFixed(1)}%`));
+        }
+      }
       console.error('');
 
       const server = new ConcurrentBrowserServer(config);
@@ -113,8 +137,14 @@ program
     
     console.log(chalk.yellow('4. Start server without proxy auto-detection:'));
     console.log(chalk.gray('  npx concurrent-browser-mcp --no-proxy-auto-detect\n'));
-    
-    console.log(chalk.yellow('5. Use in MCP client:'));
+
+    console.log(chalk.yellow('5. Start server with human-like behaviors (anti-detection):'));
+    console.log(chalk.gray('  npx concurrent-browser-mcp --humanize\n'));
+
+    console.log(chalk.yellow('6. Start server with specific human behaviors:'));
+    console.log(chalk.gray('  npx concurrent-browser-mcp --humanize-mouse --humanize-typing\n'));
+
+    console.log(chalk.yellow('7. Use in MCP client:'));
     console.log(chalk.gray('  {'));
     console.log(chalk.gray('    "mcpServers": {'));
     console.log(chalk.gray('      "concurrent-browser": {'));
@@ -124,17 +154,20 @@ program
     console.log(chalk.gray('    }'));
     console.log(chalk.gray('  }\n'));
     
-    console.log(chalk.yellow('6. Available tools include:'));
+    console.log(chalk.yellow('8. Available tools include:'));
     console.log(chalk.gray('  - browser_create_instance: Create browser instance'));
     console.log(chalk.gray('  - browser_list_instances: List all instances'));
     console.log(chalk.gray('  - browser_navigate: Navigate to URL'));
-    console.log(chalk.gray('  - browser_click: Click element'));
-    console.log(chalk.gray('  - browser_type: Type text'));
+    console.log(chalk.gray('  - browser_click: Click element (humanize option)'));
+    console.log(chalk.gray('  - browser_type: Type text (humanize option)'));
+    console.log(chalk.gray('  - browser_fill: Fill form field (humanize option)'));
+    console.log(chalk.gray('  - browser_scroll: Scroll page (humanize option)'));
     console.log(chalk.gray('  - browser_screenshot: Take screenshot'));
-    console.log(chalk.gray('  - browser_evaluate: Execute JavaScript'));
+    console.log(chalk.gray('  - browser_snapshot: Get ARIA tree (token-efficient)'));
+    console.log(chalk.gray('  - browser_batch_execute: Execute multiple operations'));
     console.log(chalk.gray('  - and more...\n'));
-    
-    console.log(chalk.yellow('7. Test real functionality:'));
+
+    console.log(chalk.yellow('9. Test real functionality:'));
     console.log(chalk.gray('  - Simulation demo: node examples/demo.js'));
     console.log(chalk.gray('  - Real test: node test-real-screenshot.js (generates actual screenshot files)'));
     console.log(chalk.gray('  - View screenshots: open screenshot-*.png\n'));
