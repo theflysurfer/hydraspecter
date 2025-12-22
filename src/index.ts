@@ -18,15 +18,24 @@ program
   .option('-c, --cleanup-interval <number>', 'Cleanup interval in minutes', (value) => parseInt(value) * 60 * 1000, defaultConfig.cleanupInterval)
   .option('--browser <browser>', 'Default browser type', 'chromium')
   .option('--headless', 'Default headless mode', true)
-  .option('--width <number>', 'Default viewport width', (value) => parseInt(value), defaultConfig.defaultBrowserConfig.viewport?.width || 1280)
-  .option('--height <number>', 'Default viewport height', (value) => parseInt(value), defaultConfig.defaultBrowserConfig.viewport?.height || 720)
-  .option('--user-agent <string>', 'Default user agent')
+  .option('--width <number>', 'Default viewport width (0 for natural)', (value) => parseInt(value), defaultConfig.defaultBrowserConfig.viewport?.width || 1280)
+  .option('--height <number>', 'Default viewport height (0 for natural)', (value) => parseInt(value), defaultConfig.defaultBrowserConfig.viewport?.height || 720)
+  .option('--natural-viewport', 'Use natural viewport size (recommended for anti-detection)', false)
+  .option('--channel <channel>', 'Browser channel: chrome, msedge (recommended for anti-detection)')
+  .option('--user-data-dir <path>', 'Persistent user data directory for profile reuse')
+  .option('--user-agent <string>', 'Default user agent (not recommended - use browser default)')
   .option('--ignore-https-errors', 'Ignore HTTPS errors', false)
   .option('--bypass-csp', 'Bypass CSP', false)
   .option('--proxy <string>', 'Proxy server (e.g., http://127.0.0.1:7890)')
   .option('--no-proxy-auto-detect', 'Disable automatic proxy detection')
   .action(async (options) => {
     // Build configuration
+    // Determine viewport: null for natural, or specified dimensions
+    const viewport = options.naturalViewport ? null : {
+      width: options.width,
+      height: options.height,
+    };
+
     const config: ServerConfig = {
       maxInstances: options.maxInstances,
       instanceTimeout: options.instanceTimeout,
@@ -34,11 +43,10 @@ program
       defaultBrowserConfig: {
         browserType: options.browser as 'chromium' | 'firefox' | 'webkit',
         headless: options.headless,
-        viewport: {
-          width: options.width,
-          height: options.height,
-        },
+        viewport: viewport,
         userAgent: options.userAgent,
+        channel: options.channel as 'chrome' | 'msedge' | 'chrome-beta' | 'msedge-beta' | undefined,
+        userDataDir: options.userDataDir,
         contextOptions: {
           ignoreHTTPSErrors: options.ignoreHttpsErrors,
           bypassCSP: options.bypassCsp,
@@ -52,14 +60,24 @@ program
 
     // Start server
     try {
-      console.error(chalk.blue('🚀 Starting Concurrent Browser MCP Server...'));
+      console.error(chalk.blue('🚀 Starting Concurrent Browser MCP Server (Stealth Mode)'));
       console.error(chalk.gray(`Max instances: ${config.maxInstances}`));
       console.error(chalk.gray(`Default browser: ${config.defaultBrowserConfig.browserType}`));
+      if (config.defaultBrowserConfig.channel) {
+        console.error(chalk.green(`Browser channel: ${config.defaultBrowserConfig.channel} (anti-detection)`));
+      }
       console.error(chalk.gray(`Headless mode: ${config.defaultBrowserConfig.headless ? 'yes' : 'no'}`));
-      console.error(chalk.gray(`Viewport size: ${config.defaultBrowserConfig.viewport?.width}x${config.defaultBrowserConfig.viewport?.height}`));
+      if (config.defaultBrowserConfig.viewport === null) {
+        console.error(chalk.green('Viewport: natural (anti-detection)'));
+      } else {
+        console.error(chalk.gray(`Viewport size: ${config.defaultBrowserConfig.viewport?.width}x${config.defaultBrowserConfig.viewport?.height}`));
+      }
+      if (config.defaultBrowserConfig.userDataDir) {
+        console.error(chalk.green(`User data dir: ${config.defaultBrowserConfig.userDataDir} (persistent profile)`));
+      }
       console.error(chalk.gray(`Instance timeout: ${config.instanceTimeout / 60000} minutes`));
       console.error(chalk.gray(`Cleanup interval: ${config.cleanupInterval / 60000} minutes`));
-      
+
       if (config.proxy?.server) {
         console.error(chalk.gray(`Proxy server: ${config.proxy.server}`));
       } else if (config.proxy?.autoDetect) {

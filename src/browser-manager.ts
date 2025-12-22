@@ -1,7 +1,14 @@
-import { chromium, firefox, webkit, Browser } from 'playwright';
+import { firefox, webkit, Browser } from 'playwright';
+import { chromium as chromiumExtra } from 'playwright-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { v4 as uuidv4 } from 'uuid';
 import { BrowserInstance, BrowserConfig, ServerConfig, ToolResult } from './types.js';
 import { execSync } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// Enable stealth mode for Chromium
+chromiumExtra.use(StealthPlugin());
 
 export class BrowserManager {
   private instances: Map<string, BrowserInstance> = new Map();
@@ -158,6 +165,9 @@ export class BrowserManager {
 
   /**
    * Create a new browser instance
+   * Supports two modes:
+   * 1. Normal mode: launches fresh browser with optional storageState
+   * 2. Persistent mode: uses userDataDir for full Chrome profile persistence
    */
   async createInstance(
     browserConfig?: Partial<BrowserConfig>,
@@ -172,25 +182,59 @@ export class BrowserManager {
       }
 
       const config = { ...this.config.defaultBrowserConfig, ...browserConfig };
-      const browser = await this.launchBrowser(config);
-      
-      const contextOptions: any = {
-        viewport: config.viewport,
-        ...config.contextOptions
-      };
-      if (config.userAgent) {
-        contextOptions.userAgent = config.userAgent;
-      }
-      
-      // Add proxy configuration to context
       const effectiveProxy = this.getEffectiveProxy(browserConfig);
-      if (effectiveProxy) {
-        contextOptions.proxy = { server: effectiveProxy };
-      }
-      
-      const context = await browser.newContext(contextOptions);
 
-      const page = await context.newPage();
+      let browser: Browser;
+      let context: any;
+      let page: any;
+
+      // Use persistent context if userDataDir is specified
+      if (config.userDataDir) {
+        console.log('Using persistent browser context mode');
+        const result = await this.launchPersistentBrowser(config);
+        browser = result.browser;
+        context = result.context;
+        page = result.page;
+      } else {
+        // Normal mode: launch browser and create context
+        browser = await this.launchBrowser(config);
+
+        const contextOptions: any = {
+          ...config.contextOptions
+        };
+
+        // Handle viewport: null means natural viewport (anti-detection)
+        if (config.viewport === null) {
+          contextOptions.viewport = null;  // Use natural viewport
+          console.log('Using natural viewport (anti-detection mode)');
+        } else if (config.viewport) {
+          contextOptions.viewport = config.viewport;
+        }
+
+        // Only set user agent if explicitly provided (not recommended for stealth)
+        if (config.userAgent) {
+          contextOptions.userAgent = config.userAgent;
+          console.warn('Custom user agent set - this may affect stealth mode');
+        }
+
+        // Add proxy configuration to context
+        if (effectiveProxy) {
+          contextOptions.proxy = { server: effectiveProxy };
+        }
+
+        // Load storage state if path is provided and file exists
+        if (config.storageStatePath && fs.existsSync(config.storageStatePath)) {
+          try {
+            contextOptions.storageState = config.storageStatePath;
+            console.log(`Loading session state from: ${config.storageStatePath}`);
+          } catch (error) {
+            console.warn(`Failed to load storage state: ${error}`);
+          }
+        }
+
+        context = await browser.newContext(contextOptions);
+        page = await context.newPage();
+      }
       
       const instanceId = uuidv4();
       const instance: BrowserInstance = {
@@ -290,6 +334,46 @@ export class BrowserManager {
   }
 
   /**
+   * Save session state (cookies, localStorage) to a file
+   */
+  async saveSessionState(instanceId: string, filePath: string): Promise<ToolResult> {
+    try {
+      const instance = this.instances.get(instanceId);
+      if (!instance) {
+        return {
+          success: false,
+          error: `Instance ${instanceId} not found`
+        };
+      }
+
+      // Ensure directory exists
+      const dir = path.dirname(filePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+
+      // Save storage state (cookies + localStorage + sessionStorage)
+      await instance.context.storageState({ path: filePath });
+
+      return {
+        success: true,
+        data: {
+          instanceId,
+          filePath,
+          saved: true,
+          message: `Session state saved to ${filePath}`
+        },
+        instanceId
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to save session state: ${error instanceof Error ? error.message : error}`
+      };
+    }
+  }
+
+  /**
    * Close all instances
    */
   async closeAllInstances(): Promise<ToolResult> {
@@ -315,29 +399,102 @@ export class BrowserManager {
   }
 
   /**
-   * Launch browser
+   * Get standard launch options for anti-detection
    */
-  private async launchBrowser(config: BrowserConfig): Promise<Browser> {
+  private getLaunchOptions(config: BrowserConfig): any {
     const launchOptions: any = {
-      headless: config.headless ?? true
+      headless: config.headless ?? true,
+      // Remove automation-revealing default arguments
+      ignoreDefaultArgs: ['--enable-automation'],
+      // Comprehensive anti-detection flags
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-blink-features=AutomationControlled',  // Critical: hides automation flag
+        '--disable-infobars',  // Hides "Chrome is being controlled" banner
+        '--disable-dev-shm-usage',  // Improves stability
+        '--no-first-run',  // Prevents first-run dialogs
+        '--no-default-browser-check',  // Skips default browser check
+        '--disable-background-timer-throttling',  // Better performance
+        '--disable-backgrounding-occluded-windows',
+        '--disable-renderer-backgrounding',
+        '--disable-features=IsolateOrigins,site-per-process',  // Better compatibility
+      ]
     };
-    
-    if (config.headless) {
-      launchOptions.args = ['--no-sandbox', '--disable-setuid-sandbox'];
+
+    // Use real Chrome/Edge channel if specified (recommended for anti-detection)
+    if (config.channel && config.browserType === 'chromium') {
+      launchOptions.channel = config.channel;
+      console.log(`Using real browser channel: ${config.channel}`);
+    }
+
+    // Add window size only if not using natural viewport
+    if (config.viewport !== null) {
+      const width = config.viewport?.width || 1920;
+      const height = config.viewport?.height || 1080;
+      launchOptions.args.push(`--window-size=${width},${height}`);
     }
 
     // Add proxy arguments for Chromium
     const effectiveProxy = this.getEffectiveProxy(config);
     if (effectiveProxy && config.browserType === 'chromium') {
-      if (!launchOptions.args) {
-        launchOptions.args = [];
-      }
       launchOptions.args.push(`--proxy-server=${effectiveProxy}`);
     }
 
+    return launchOptions;
+  }
+
+  /**
+   * Launch browser with persistent context (userDataDir)
+   * This maintains a real Chrome profile with all cookies, extensions, etc.
+   */
+  async launchPersistentBrowser(config: BrowserConfig): Promise<{ browser: Browser; context: any; page: any }> {
+    if (!config.userDataDir) {
+      throw new Error('userDataDir is required for persistent context');
+    }
+
+    const launchOptions = this.getLaunchOptions(config);
+
+    // Ensure userDataDir exists
+    if (!fs.existsSync(config.userDataDir)) {
+      fs.mkdirSync(config.userDataDir, { recursive: true });
+      console.log(`Created user data directory: ${config.userDataDir}`);
+    }
+
+    console.log(`Launching persistent context with userDataDir: ${config.userDataDir}`);
+
+    // launchPersistentContext returns a BrowserContext directly (not a Browser)
+    const context = await chromiumExtra.launchPersistentContext(config.userDataDir, {
+      ...launchOptions,
+      viewport: config.viewport === null ? null : config.viewport,
+      ignoreHTTPSErrors: config.contextOptions?.ignoreHTTPSErrors,
+      bypassCSP: config.contextOptions?.bypassCSP,
+    });
+
+    // Get or create a page
+    const pages = context.pages();
+    const page = pages.length > 0 ? pages[0] : await context.newPage();
+
+    // For persistent context, browser() returns the browser instance
+    const browser = context.browser()!;
+
+    return { browser, context, page };
+  }
+
+  /**
+   * Launch browser
+   * Uses playwright-extra with stealth plugin for Chromium to avoid bot detection
+   * Supports channel option to use real Chrome/Edge instead of Chromium
+   */
+  private async launchBrowser(config: BrowserConfig): Promise<Browser> {
+    const launchOptions = this.getLaunchOptions(config);
+
     switch (config.browserType) {
       case 'chromium':
-        return await chromium.launch(launchOptions);
+        // Use playwright-extra with stealth plugin to avoid bot detection
+        const channelInfo = config.channel ? ` (channel: ${config.channel})` : '';
+        console.log(`Launching Chromium with enhanced stealth mode${channelInfo}`);
+        return await chromiumExtra.launch(launchOptions);
       case 'firefox':
         return await firefox.launch(launchOptions);
       case 'webkit':

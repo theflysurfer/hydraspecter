@@ -26,9 +26,12 @@ export interface BrowserConfig {
   viewport?: {
     width: number;
     height: number;
-  };
+  } | null;  // null = natural viewport (anti-detection recommended)
   userAgent?: string;
   proxy?: ProxyConfig;
+  storageStatePath?: string;  // Path to load session state from (cookies, localStorage)
+  channel?: 'chrome' | 'msedge' | 'chrome-beta' | 'msedge-beta';  // Use real browser instead of Chromium
+  userDataDir?: string;  // Persistent profile directory for launchPersistentContext
   contextOptions?: {
     ignoreHTTPSErrors?: boolean;
     bypassCSP?: boolean;

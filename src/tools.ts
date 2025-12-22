@@ -54,8 +54,30 @@ export class BrowserTools {
                 tags: { type: 'array', items: { type: 'string' }, description: 'Tags' }
               },
               description: 'Instance metadata'
+            },
+            storageStatePath: {
+              type: 'string',
+              description: 'Path to a JSON file containing saved session state (cookies, localStorage). If file exists, session will be restored.'
             }
           }
+        }
+      },
+      {
+        name: 'browser_save_session',
+        description: 'Save the current session state (cookies, localStorage) to a JSON file for later restoration',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID'
+            },
+            filePath: {
+              type: 'string',
+              description: 'Path where to save the session state JSON file'
+            }
+          },
+          required: ['instanceId', 'filePath']
         }
       },
       {
@@ -485,6 +507,76 @@ export class BrowserTools {
           },
           required: ['instanceId']
         }
+      },
+
+      // ARIA Snapshot tool - Token-efficient accessibility tree
+      {
+        name: 'browser_snapshot',
+        description: 'Capture accessibility tree snapshot (ARIA). Much more token-efficient than screenshots (~2-8k tokens vs ~100k for screenshots). Returns structured YAML representation of page elements.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID'
+            },
+            selector: {
+              type: 'string',
+              description: 'Optional CSS selector to scope the snapshot to a specific element'
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+
+      // Batch execution tool - Execute multiple operations in sequence
+      {
+        name: 'browser_batch_execute',
+        description: 'Execute multiple browser operations in sequence. Saves ~90% tokens compared to individual calls. Ideal for form filling, multi-step navigation, or any workflow with 2+ known steps.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID'
+            },
+            steps: {
+              type: 'array',
+              description: 'Array of operations to execute in sequence',
+              items: {
+                type: 'object',
+                properties: {
+                  action: {
+                    type: 'string',
+                    enum: ['navigate', 'click', 'type', 'fill', 'evaluate', 'wait', 'snapshot'],
+                    description: 'Action to perform'
+                  },
+                  args: {
+                    type: 'object',
+                    description: 'Arguments for the action'
+                  },
+                  continueOnError: {
+                    type: 'boolean',
+                    description: 'Continue execution if this step fails',
+                    default: false
+                  }
+                },
+                required: ['action', 'args']
+              }
+            },
+            stopOnFirstError: {
+              type: 'boolean',
+              description: 'Stop execution on first error',
+              default: true
+            },
+            returnOnlyFinal: {
+              type: 'boolean',
+              description: 'Only return the result of the last step (saves tokens)',
+              default: false
+            }
+          },
+          required: ['instanceId', 'steps']
+        }
       }
     ];
   }
@@ -501,10 +593,14 @@ export class BrowserTools {
               browserType: args.browserType || 'chromium',
               headless: args.headless ?? true,
               viewport: args.viewport || { width: 1280, height: 720 },
-              userAgent: args.userAgent
+              userAgent: args.userAgent,
+              storageStatePath: args.storageStatePath
             },
             args.metadata
           );
+
+        case 'browser_save_session':
+          return await this.browserManager.saveSessionState(args.instanceId, args.filePath);
 
         case 'browser_list_instances':
           return this.browserManager.listInstances();
@@ -580,6 +676,15 @@ export class BrowserTools {
             includeLinks: args.includeLinks ?? true,
             maxLength: args.maxLength || 10000,
             selector: args.selector
+          });
+
+        case 'browser_snapshot':
+          return await this.getSnapshot(args.instanceId, args.selector);
+
+        case 'browser_batch_execute':
+          return await this.batchExecute(args.instanceId, args.steps, {
+            stopOnFirstError: args.stopOnFirstError ?? true,
+            returnOnlyFinal: args.returnOnlyFinal ?? false
           });
 
         default:
@@ -1170,7 +1275,7 @@ export class BrowserTools {
 
       return {
         success: true,
-        data: { 
+        data: {
           markdown: markdownContent,
           length: markdownContent.length,
           truncated: markdownContent.length >= options.maxLength,
@@ -1186,5 +1291,171 @@ export class BrowserTools {
         instanceId
       };
     }
+  }
+
+  /**
+   * Get ARIA accessibility snapshot - Token-efficient alternative to screenshots
+   * Returns ~2-8k tokens vs ~100k+ for screenshots
+   */
+  private async getSnapshot(instanceId: string, selector?: string): Promise<ToolResult> {
+    const instance = this.browserManager.getInstance(instanceId);
+    if (!instance) {
+      return { success: false, error: `Instance ${instanceId} not found` };
+    }
+
+    try {
+      const locator = selector
+        ? instance.page.locator(selector)
+        : instance.page.locator('body');
+
+      const snapshot = await locator.ariaSnapshot();
+      const url = instance.page.url();
+      const title = await instance.page.title();
+
+      return {
+        success: true,
+        data: {
+          snapshot,
+          url,
+          title,
+          selector: selector || 'body',
+          snapshotLength: snapshot.length
+        },
+        instanceId
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Snapshot failed: ${error instanceof Error ? error.message : error}`,
+        instanceId
+      };
+    }
+  }
+
+  /**
+   * Execute multiple browser operations in sequence
+   * Saves ~90% tokens compared to individual calls
+   */
+  private async batchExecute(
+    instanceId: string,
+    steps: Array<{ action: string; args: any; continueOnError?: boolean }>,
+    options: { stopOnFirstError: boolean; returnOnlyFinal: boolean }
+  ): Promise<ToolResult> {
+    const instance = this.browserManager.getInstance(instanceId);
+    if (!instance) {
+      return { success: false, error: `Instance ${instanceId} not found` };
+    }
+
+    const results: Array<{ step: number; action: string; success: boolean; result?: any; error?: string }> = [];
+    let lastResult: any = null;
+
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      if (!step) continue;  // TypeScript guard
+      const stepResult: any = { step: i + 1, action: step.action, success: false };
+
+      try {
+        switch (step.action) {
+          case 'navigate':
+            await instance.page.goto(step.args.url, {
+              waitUntil: step.args.waitUntil || 'load',
+              timeout: step.args.timeout || 30000
+            });
+            stepResult.result = { url: instance.page.url() };
+            break;
+
+          case 'click':
+            await instance.page.click(step.args.selector, {
+              timeout: step.args.timeout || 30000
+            });
+            stepResult.result = { clicked: step.args.selector };
+            break;
+
+          case 'type':
+            await instance.page.type(step.args.selector, step.args.text, {
+              delay: step.args.delay || 0,
+              timeout: step.args.timeout || 30000
+            });
+            stepResult.result = { typed: step.args.text.length + ' chars' };
+            break;
+
+          case 'fill':
+            await instance.page.fill(step.args.selector, step.args.value, {
+              timeout: step.args.timeout || 30000
+            });
+            stepResult.result = { filled: step.args.selector };
+            break;
+
+          case 'evaluate':
+            const evalResult = await instance.page.evaluate(step.args.script);
+            stepResult.result = evalResult;
+            break;
+
+          case 'wait':
+            if (step.args.selector) {
+              await instance.page.waitForSelector(step.args.selector, {
+                timeout: step.args.timeout || 30000
+              });
+              stepResult.result = { waited: step.args.selector };
+            } else if (step.args.ms) {
+              await instance.page.waitForTimeout(step.args.ms);
+              stepResult.result = { waited: step.args.ms + 'ms' };
+            }
+            break;
+
+          case 'snapshot':
+            const locator = step.args.selector
+              ? instance.page.locator(step.args.selector)
+              : instance.page.locator('body');
+            const snapshot = await locator.ariaSnapshot();
+            stepResult.result = { snapshot };
+            break;
+
+          default:
+            stepResult.error = `Unknown action: ${step.action}`;
+            break;
+        }
+
+        if (!stepResult.error) {
+          stepResult.success = true;
+          lastResult = stepResult.result;
+        }
+
+      } catch (error) {
+        stepResult.error = error instanceof Error ? error.message : String(error);
+
+        if (options.stopOnFirstError && !step.continueOnError) {
+          results.push(stepResult);
+          return {
+            success: false,
+            data: {
+              completedSteps: i,
+              totalSteps: steps.length,
+              results: options.returnOnlyFinal ? undefined : results,
+              lastResult,
+              stoppedAtStep: i + 1,
+              error: stepResult.error
+            },
+            instanceId
+          };
+        }
+      }
+
+      results.push(stepResult);
+    }
+
+    const allSuccessful = results.every(r => r.success);
+
+    return {
+      success: allSuccessful,
+      data: {
+        completedSteps: steps.length,
+        totalSteps: steps.length,
+        results: options.returnOnlyFinal ? undefined : results,
+        lastResult,
+        allSuccessful
+      },
+      instanceId
+    };
   }
 } 
