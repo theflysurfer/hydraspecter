@@ -229,7 +229,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             filePath: {
               type: 'string',
@@ -351,7 +351,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             }
           },
           required: ['instanceId']
@@ -390,7 +390,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             url: {
               type: 'string',
@@ -427,7 +427,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             }
           },
           required: ['instanceId']
@@ -441,7 +441,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             }
           },
           required: ['instanceId']
@@ -455,7 +455,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             }
           },
           required: ['instanceId']
@@ -471,7 +471,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID from browser_create_instance or browser_list_instances'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             selector: {
               type: 'string',
@@ -526,7 +526,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             selector: {
               type: 'string',
@@ -575,7 +575,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             selector: {
               type: 'string',
@@ -608,7 +608,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             selector: {
               type: 'string',
@@ -635,7 +635,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             direction: {
               type: 'string',
@@ -677,7 +677,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             }
           },
           required: ['instanceId']
@@ -691,7 +691,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             selector: {
               type: 'string',
@@ -714,7 +714,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             selector: {
               type: 'string',
@@ -743,7 +743,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             fullPage: {
               type: 'boolean',
@@ -790,7 +790,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             selector: {
               type: 'string',
@@ -813,7 +813,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             timeout: {
               type: 'number',
@@ -834,7 +834,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             script: {
               type: 'string',
@@ -854,7 +854,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             includeLinks: {
               type: 'boolean',
@@ -884,7 +884,7 @@ export class BrowserTools {
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
             },
             selector: {
               type: 'string',
@@ -1262,12 +1262,32 @@ export class BrowserTools {
     return this.globalPages.get(pageId);
   }
 
+  /**
+   * Get a Page from either instanceId or pageId
+   * This enables tools to work with both browser_create_instance and browser_create_global
+   */
+  private getPageFromId(id: string): { page: Page; source: 'instance' | 'global' } | null {
+    // First try as instanceId
+    const instance = this.browserManager.getInstance(id);
+    if (instance) {
+      return { page: instance.page, source: 'instance' };
+    }
+
+    // Then try as pageId from global profile
+    const globalPage = this.globalPages.get(id);
+    if (globalPage) {
+      return { page: globalPage, source: 'global' };
+    }
+
+    return null;
+  }
+
   // ============= Implementation of specific tool methods =============
 
   private async navigate(instanceId: string, url: string, options: NavigationOptions): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
@@ -1277,10 +1297,10 @@ export class BrowserTools {
       if (options.timeout) {
         gotoOptions.timeout = options.timeout;
       }
-      await instance.page.goto(url, gotoOptions);
+      await pageResult.page.goto(url, gotoOptions);
 
       // Check for detection signals after navigation
-      const detectionResult = await this.detectionMonitor.checkPage(instance.page);
+      const detectionResult = await this.detectionMonitor.checkPage(pageResult.page);
 
       if (detectionResult.detected) {
         // Report detection to domain intelligence
@@ -1290,8 +1310,8 @@ export class BrowserTools {
         return {
           success: true,
           data: {
-            url: instance.page.url(),
-            title: await instance.page.title(),
+            url: pageResult.page.url(),
+            title: await pageResult.page.title(),
             detection: {
               detected: true,
               type: detectionResult.type,
@@ -1308,7 +1328,7 @@ export class BrowserTools {
 
       return {
         success: true,
-        data: { url: instance.page.url(), title: await instance.page.title() },
+        data: { url: pageResult.page.url(), title: await pageResult.page.title() },
         instanceId
       };
     } catch (error) {
@@ -1321,16 +1341,16 @@ export class BrowserTools {
   }
 
   private async goBack(instanceId: string): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
-      await instance.page.goBack();
+      await pageResult.page.goBack();
       return {
         success: true,
-        data: { url: instance.page.url() },
+        data: { url: pageResult.page.url() },
         instanceId
       };
     } catch (error) {
@@ -1343,16 +1363,16 @@ export class BrowserTools {
   }
 
   private async goForward(instanceId: string): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
-      await instance.page.goForward();
+      await pageResult.page.goForward();
       return {
         success: true,
-        data: { url: instance.page.url() },
+        data: { url: pageResult.page.url() },
         instanceId
       };
     } catch (error) {
@@ -1365,16 +1385,16 @@ export class BrowserTools {
   }
 
   private async refresh(instanceId: string): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
-      await instance.page.reload();
+      await pageResult.page.reload();
       return {
         success: true,
-        data: { url: instance.page.url() },
+        data: { url: pageResult.page.url() },
         instanceId
       };
     } catch (error) {
@@ -1387,18 +1407,18 @@ export class BrowserTools {
   }
 
   private async click(instanceId: string, selector: string, options: ClickOptions): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
       // Check if humanize should be enabled (supports "auto" mode with detection)
-      const useHumanize = await this.shouldHumanizeAsync(instance.page, 'mouse', options.humanize);
+      const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'mouse', options.humanize);
 
       if (useHumanize) {
         // Use human-like mouse movement with Bezier curves
-        await humanClick(instance.page, selector);
+        await humanClick(pageResult.page, selector);
         const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.mouse === 'auto';
         return {
           success: true,
@@ -1414,7 +1434,7 @@ export class BrowserTools {
       if (options.clickCount) clickOptions.clickCount = options.clickCount;
       if (options.delay) clickOptions.delay = options.delay;
       if (options.timeout) clickOptions.timeout = options.timeout;
-      await instance.page.click(selector, clickOptions);
+      await pageResult.page.click(selector, clickOptions);
       return {
         success: true,
         data: { selector, clicked: true },
@@ -1430,18 +1450,18 @@ export class BrowserTools {
   }
 
   private async type(instanceId: string, selector: string, text: string, options: TypeOptions): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
       // Check if humanize should be enabled (supports "auto" mode with detection)
-      const useHumanize = await this.shouldHumanizeAsync(instance.page, 'typing', options.humanize);
+      const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'typing', options.humanize);
 
       if (useHumanize) {
         // Use human-like typing with delays and occasional typos
-        await humanTypeInElement(instance.page, selector, text);
+        await humanTypeInElement(pageResult.page, selector, text);
         const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.typing === 'auto';
         return {
           success: true,
@@ -1454,7 +1474,7 @@ export class BrowserTools {
       const typeOptions: any = {};
       if (options.delay) typeOptions.delay = options.delay;
       if (options.timeout) typeOptions.timeout = options.timeout;
-      await instance.page.type(selector, text, typeOptions);
+      await pageResult.page.type(selector, text, typeOptions);
       return {
         success: true,
         data: { selector, text, typed: true },
@@ -1470,21 +1490,21 @@ export class BrowserTools {
   }
 
   private async fill(instanceId: string, selector: string, value: string, options: { timeout: number; humanize?: HumanizeMode }): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
       // Check if humanize should be enabled (supports "auto" mode with detection)
-      const useHumanize = await this.shouldHumanizeAsync(instance.page, 'typing', options.humanize);
+      const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'typing', options.humanize);
 
       if (useHumanize) {
         // Clear field first, then use human-like typing
-        await instance.page.click(selector);
-        await instance.page.keyboard.press('Control+a');
-        await instance.page.keyboard.press('Backspace');
-        await humanType(instance.page, value);
+        await pageResult.page.click(selector);
+        await pageResult.page.keyboard.press('Control+a');
+        await pageResult.page.keyboard.press('Backspace');
+        await humanType(pageResult.page, value);
         const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.typing === 'auto';
         return {
           success: true,
@@ -1494,7 +1514,7 @@ export class BrowserTools {
       }
 
       // Standard fill (instant)
-      await instance.page.fill(selector, value, { timeout: options.timeout });
+      await pageResult.page.fill(selector, value, { timeout: options.timeout });
       return {
         success: true,
         data: { selector, value, filled: true },
@@ -1510,13 +1530,13 @@ export class BrowserTools {
   }
 
   private async selectOption(instanceId: string, selector: string, value: string, timeout: number): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
-      await instance.page.selectOption(selector, value, { timeout });
+      await pageResult.page.selectOption(selector, value, { timeout });
       return {
         success: true,
         data: { selector, value, selected: true },
@@ -1532,9 +1552,9 @@ export class BrowserTools {
   }
 
   private async scroll(instanceId: string, options: ScrollOptions): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
@@ -1542,15 +1562,15 @@ export class BrowserTools {
       const amount = options.amount || 300;
 
       // Check if humanize should be enabled (supports "auto" mode with detection)
-      const useHumanScroll = await this.shouldHumanizeAsync(instance.page, 'scroll', options.humanize);
+      const useHumanScroll = await this.shouldHumanizeAsync(pageResult.page, 'scroll', options.humanize);
       const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.scroll === 'auto';
 
       // If selector provided, scroll to element
       if (options.selector) {
         if (useHumanScroll) {
-          await humanScrollToElement(instance.page, options.selector);
+          await humanScrollToElement(pageResult.page, options.selector);
         } else {
-          await instance.page.locator(options.selector).scrollIntoViewIfNeeded({ timeout: options.timeout });
+          await pageResult.page.locator(options.selector).scrollIntoViewIfNeeded({ timeout: options.timeout });
         }
         return {
           success: true,
@@ -1563,38 +1583,38 @@ export class BrowserTools {
       if (useHumanScroll) {
         switch (direction) {
           case 'up':
-            await humanScrollUp(instance.page, amount);
+            await humanScrollUp(pageResult.page, amount);
             break;
           case 'down':
-            await humanScrollDown(instance.page, amount);
+            await humanScrollDown(pageResult.page, amount);
             break;
           case 'top':
-            await humanScrollToTop(instance.page);
+            await humanScrollToTop(pageResult.page);
             break;
           case 'bottom':
-            await humanScrollToBottom(instance.page);
+            await humanScrollToBottom(pageResult.page);
             break;
         }
       } else {
         // Standard instant scroll
         switch (direction) {
           case 'up':
-            await instance.page.evaluate((amt) => window.scrollBy(0, -amt), amount);
+            await pageResult.page.evaluate((amt) => window.scrollBy(0, -amt), amount);
             break;
           case 'down':
-            await instance.page.evaluate((amt) => window.scrollBy(0, amt), amount);
+            await pageResult.page.evaluate((amt) => window.scrollBy(0, amt), amount);
             break;
           case 'top':
-            await instance.page.evaluate(() => window.scrollTo(0, 0));
+            await pageResult.page.evaluate(() => window.scrollTo(0, 0));
             break;
           case 'bottom':
-            await instance.page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+            await pageResult.page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
             break;
         }
       }
 
       // Get final scroll position
-      const scrollPosition = await instance.page.evaluate(() => ({
+      const scrollPosition = await pageResult.page.evaluate(() => ({
         x: window.scrollX,
         y: window.scrollY,
         maxY: document.documentElement.scrollHeight - window.innerHeight
@@ -1621,22 +1641,22 @@ export class BrowserTools {
   }
 
   private async getPageInfo(instanceId: string): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
-      const url = instance.page.url();
-      const title = await instance.page.title();
-      const content = await instance.page.content();
+      const url = pageResult.page.url();
+      const title = await pageResult.page.title();
+      const content = await pageResult.page.content();
       
       // Get additional page information
-      const viewport = instance.page.viewportSize();
-      const loadState = await instance.page.evaluate(() => document.readyState);
+      const viewport = pageResult.page.viewportSize();
+      const loadState = await pageResult.page.evaluate(() => document.readyState);
       
       // Get basic page statistics
-      const pageStats = await instance.page.evaluate(() => {
+      const pageStats = await pageResult.page.evaluate(() => {
         const links = document.querySelectorAll('a[href]').length;
         const images = document.querySelectorAll('img').length;
         const forms = document.querySelectorAll('form').length;
@@ -1676,13 +1696,13 @@ export class BrowserTools {
   }
 
   private async getElementText(instanceId: string, selector: string, timeout: number): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
-      const text = await instance.page.textContent(selector, { timeout });
+      const text = await pageResult.page.textContent(selector, { timeout });
       return {
         success: true,
         data: { selector, text },
@@ -1698,13 +1718,13 @@ export class BrowserTools {
   }
 
   private async getElementAttribute(instanceId: string, selector: string, attribute: string, timeout: number): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
-      const value = await instance.page.getAttribute(selector, attribute, { timeout });
+      const value = await pageResult.page.getAttribute(selector, attribute, { timeout });
       return {
         success: true,
         data: { selector, attribute, value },
@@ -1720,16 +1740,16 @@ export class BrowserTools {
   }
 
   private async screenshot(instanceId: string, options: ScreenshotOptions, selector?: string): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
       let screenshotData: Buffer;
       
       if (selector) {
-        const element = await instance.page.$(selector);
+        const element = await pageResult.page.$(selector);
         if (!element) {
           return { success: false, error: `Element not found: ${selector}`, instanceId };
         }
@@ -1738,7 +1758,7 @@ export class BrowserTools {
           quality: options.type === 'jpeg' ? options.quality : undefined
         });
       } else {
-        screenshotData = await instance.page.screenshot({
+        screenshotData = await pageResult.page.screenshot({
           fullPage: options.fullPage,
           type: options.type,
           quality: options.type === 'jpeg' ? options.quality : undefined,
@@ -1765,13 +1785,13 @@ export class BrowserTools {
   }
 
   private async waitForElement(instanceId: string, selector: string, timeout: number): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
-      await instance.page.waitForSelector(selector, { timeout });
+      await pageResult.page.waitForSelector(selector, { timeout });
       return {
         success: true,
         data: { selector, found: true },
@@ -1787,16 +1807,16 @@ export class BrowserTools {
   }
 
   private async waitForNavigation(instanceId: string, timeout: number): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
-      await instance.page.waitForNavigation({ timeout });
+      await pageResult.page.waitForNavigation({ timeout });
       return {
         success: true,
-        data: { url: instance.page.url() },
+        data: { url: pageResult.page.url() },
         instanceId
       };
     } catch (error) {
@@ -1809,13 +1829,13 @@ export class BrowserTools {
   }
 
   private async evaluate(instanceId: string, script: string): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
-      const result = await instance.page.evaluate(script);
+      const result = await pageResult.page.evaluate(script);
       return {
         success: true,
         data: { script, result },
@@ -1835,14 +1855,14 @@ export class BrowserTools {
     maxLength: number;
     selector?: string;
   }): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
       // JavaScript function to extract page content and convert to Markdown
-      const markdownContent = await instance.page.evaluate((opts) => {
+      const markdownContent = await pageResult.page.evaluate((opts) => {
         const { includeLinks, maxLength, selector } = opts;
         
         // Select the root element to process
@@ -2006,8 +2026,8 @@ export class BrowserTools {
           markdown: markdownContent,
           length: markdownContent.length,
           truncated: markdownContent.length >= options.maxLength,
-          url: instance.page.url(),
-          title: await instance.page.title()
+          url: pageResult.page.url(),
+          title: await pageResult.page.title()
         },
         instanceId
       };
@@ -2025,19 +2045,19 @@ export class BrowserTools {
    * Returns ~2-8k tokens vs ~100k+ for screenshots
    */
   private async getSnapshot(instanceId: string, selector?: string): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
       const locator = selector
-        ? instance.page.locator(selector)
-        : instance.page.locator('body');
+        ? pageResult.page.locator(selector)
+        : pageResult.page.locator('body');
 
       const snapshot = await locator.ariaSnapshot();
-      const url = instance.page.url();
-      const title = await instance.page.title();
+      const url = pageResult.page.url();
+      const title = await pageResult.page.title();
 
       return {
         success: true,
@@ -2068,9 +2088,9 @@ export class BrowserTools {
     steps: Array<{ action: string; args: any; continueOnError?: boolean }>,
     options: { stopOnFirstError: boolean; returnOnlyFinal: boolean }
   ): Promise<ToolResult> {
-    const instance = this.browserManager.getInstance(instanceId);
-    if (!instance) {
-      return { success: false, error: `Instance ${instanceId} not found` };
+    const pageResult = this.getPageFromId(instanceId);
+    if (!pageResult) {
+      return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     const results: Array<{ step: number; action: string; success: boolean; result?: any; error?: string }> = [];
@@ -2084,22 +2104,22 @@ export class BrowserTools {
       try {
         switch (step.action) {
           case 'navigate':
-            await instance.page.goto(step.args.url, {
+            await pageResult.page.goto(step.args.url, {
               waitUntil: step.args.waitUntil || 'load',
               timeout: step.args.timeout || 30000
             });
-            stepResult.result = { url: instance.page.url() };
+            stepResult.result = { url: pageResult.page.url() };
             break;
 
           case 'click':
-            await instance.page.click(step.args.selector, {
+            await pageResult.page.click(step.args.selector, {
               timeout: step.args.timeout || 30000
             });
             stepResult.result = { clicked: step.args.selector };
             break;
 
           case 'type':
-            await instance.page.type(step.args.selector, step.args.text, {
+            await pageResult.page.type(step.args.selector, step.args.text, {
               delay: step.args.delay || 0,
               timeout: step.args.timeout || 30000
             });
@@ -2107,33 +2127,33 @@ export class BrowserTools {
             break;
 
           case 'fill':
-            await instance.page.fill(step.args.selector, step.args.value, {
+            await pageResult.page.fill(step.args.selector, step.args.value, {
               timeout: step.args.timeout || 30000
             });
             stepResult.result = { filled: step.args.selector };
             break;
 
           case 'evaluate':
-            const evalResult = await instance.page.evaluate(step.args.script);
+            const evalResult = await pageResult.page.evaluate(step.args.script);
             stepResult.result = evalResult;
             break;
 
           case 'wait':
             if (step.args.selector) {
-              await instance.page.waitForSelector(step.args.selector, {
+              await pageResult.page.waitForSelector(step.args.selector, {
                 timeout: step.args.timeout || 30000
               });
               stepResult.result = { waited: step.args.selector };
             } else if (step.args.ms) {
-              await instance.page.waitForTimeout(step.args.ms);
+              await pageResult.page.waitForTimeout(step.args.ms);
               stepResult.result = { waited: step.args.ms + 'ms' };
             }
             break;
 
           case 'snapshot':
             const locator = step.args.selector
-              ? instance.page.locator(step.args.selector)
-              : instance.page.locator('body');
+              ? pageResult.page.locator(step.args.selector)
+              : pageResult.page.locator('body');
             const snapshot = await locator.ariaSnapshot();
             stepResult.result = { snapshot };
             break;

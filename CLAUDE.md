@@ -108,6 +108,14 @@ Navigate → Detection? → Yes → Level++ → Apply new settings
 
 All tools prefixed with `browser_`.
 
+### ID Compatibility
+
+All tools accept either:
+- `instanceId` from `browser_create_instance`
+- `pageId` from `browser_create_global`
+
+This means you can mix and match - create a page with `browser_create_global` and use `browser_click`, `browser_type`, etc. with the returned `pageId`.
+
 ## Humanize Modes
 
 | Mode | Description |
