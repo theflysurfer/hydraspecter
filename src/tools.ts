@@ -1,4 +1,5 @@
-import { Tool } from '@modelcontextprotocol/sdk/types.js';
+import { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { Page } from 'playwright';
 import { BrowserManager } from './browser-manager.js';
 import {
   ToolResult,
@@ -7,29 +8,157 @@ import {
   TypeOptions,
   ScreenshotOptions,
   ScrollOptions,
-  HumanizeConfig
+  HumanizeConfig,
+  HumanizeMode,
+  RateLimitConfig
 } from './types.js';
 import { humanClick } from './utils/ghost-cursor.js';
 import { humanType, humanTypeInElement } from './utils/human-typing.js';
 import { humanScrollDown, humanScrollUp, humanScrollToElement, humanScrollToTop, humanScrollToBottom } from './utils/human-scroll.js';
+import { DetectionMonitor, DetectionResult } from './utils/detection-monitor.js';
+import { RateLimiter } from './utils/rate-limiter.js';
+import { getGlobalProfile, GlobalProfile } from './global-profile.js';
+import { getDomainIntelligence, DomainIntelligence } from './domain-intelligence.js';
 
 export class BrowserTools {
   private humanizeConfig: HumanizeConfig;
+  private detectionMonitor: DetectionMonitor;
+  private rateLimiter: RateLimiter;
+  private globalProfile: GlobalProfile;
+  private domainIntelligence: DomainIntelligence;
+  // Cache detection results per URL to avoid repeated checks
+  private detectionCache: Map<string, { result: DetectionResult; timestamp: number }> = new Map();
+  private readonly DETECTION_CACHE_TTL = 30000; // 30 seconds
+  // Map pageId to Page for global profile pages
+  private globalPages: Map<string, Page> = new Map();
 
-  constructor(private browserManager: BrowserManager, humanizeConfig?: HumanizeConfig) {
+  constructor(
+    private browserManager: BrowserManager,
+    humanizeConfig?: HumanizeConfig,
+    rateLimitConfig?: RateLimitConfig,
+    options?: { profileDir?: string; headless?: boolean; channel?: 'chrome' | 'msedge' }
+  ) {
     this.humanizeConfig = humanizeConfig || {};
+    this.detectionMonitor = new DetectionMonitor({
+      alwaysHumanizeDomains: humanizeConfig?.alwaysHumanizeDomains
+    });
+    this.rateLimiter = new RateLimiter(rateLimitConfig);
+    this.globalProfile = getGlobalProfile({
+      profileDir: options?.profileDir,
+      headless: options?.headless ?? false, // Default visible for anti-detection
+      channel: options?.channel,
+    });
+    this.domainIntelligence = getDomainIntelligence();
+  }
+
+  /**
+   * Convert internal ToolResult to MCP-compliant CallToolResult format
+   */
+  private toMcpResult(result: ToolResult, options?: { isImage?: boolean }): CallToolResult {
+    if (!result.success) {
+      return {
+        content: [{ type: 'text', text: result.error || 'Unknown error' }],
+        isError: true,
+      };
+    }
+
+    // Handle screenshot results (base64 image)
+    if (options?.isImage && result.data?.screenshot) {
+      return {
+        content: [
+          {
+            type: 'image',
+            data: result.data.screenshot,
+            mimeType: result.data.type === 'jpeg' ? 'image/jpeg' : 'image/png',
+          },
+        ],
+        isError: false,
+      };
+    }
+
+    // Standard text result
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result.data, null, 2) }],
+      isError: false,
+    };
   }
 
   /**
    * Check if humanize should be enabled for a specific action
+   * Supports: true, false, or "auto" (detection-based)
    */
-  private shouldHumanize(actionType: 'mouse' | 'typing' | 'scroll', explicitValue?: boolean): boolean {
-    // If explicitly set in the request, use that value
-    if (explicitValue !== undefined) {
+  private async shouldHumanizeAsync(
+    page: Page,
+    actionType: 'mouse' | 'typing' | 'scroll',
+    explicitValue?: HumanizeMode
+  ): Promise<boolean> {
+    // If explicitly set in the request (true/false), use that value
+    if (explicitValue === true || explicitValue === false) {
       return explicitValue;
     }
-    // Otherwise, check global config
-    return this.humanizeConfig[actionType] || false;
+
+    // Get the mode from config
+    const mode = explicitValue === 'auto' ? 'auto' : this.humanizeConfig[actionType];
+
+    // If mode is true/false, return it directly
+    if (mode === true || mode === false) {
+      return mode;
+    }
+
+    // If mode is "auto", run detection
+    if (mode === 'auto') {
+      return await this.checkDetectionForPage(page);
+    }
+
+    // Default: no humanize
+    return false;
+  }
+
+
+  /**
+   * Check if page shows detection signals (cached)
+   */
+  private async checkDetectionForPage(page: Page): Promise<boolean> {
+    const url = page.url();
+    const now = Date.now();
+
+    // Check cache first
+    const cached = this.detectionCache.get(url);
+    if (cached && (now - cached.timestamp) < this.DETECTION_CACHE_TTL) {
+      return cached.result.shouldHumanize;
+    }
+
+    // Run detection
+    const result = await this.detectionMonitor.checkPage(page);
+
+    // Cache result
+    this.detectionCache.set(url, { result, timestamp: now });
+
+    // Log if detection triggered
+    if (result.detected) {
+      console.log(`[DetectionMonitor] ${result.type || 'detection'}: ${result.details} (confidence: ${result.confidence})`);
+    }
+
+    return result.shouldHumanize;
+  }
+
+  /**
+   * Get last detection result for a page
+   */
+  getLastDetectionResult(url: string): DetectionResult | null {
+    const cached = this.detectionCache.get(url);
+    return cached?.result || null;
+  }
+
+  /**
+   * Clear detection cache for a URL
+   */
+  clearDetectionCache(url?: string): void {
+    if (url) {
+      this.detectionCache.delete(url);
+    } else {
+      this.detectionCache.clear();
+    }
   }
 
   /**
@@ -40,19 +169,19 @@ export class BrowserTools {
       // Instance management tools
       {
         name: 'browser_create_instance',
-        description: 'Create a new browser instance',
+        description: 'Create a new browser instance. Returns an instanceId to use with other browser_* tools. For anti-detection: use headless: false + no custom viewport. Session can be restored from a previous browser_save_session file.',
         inputSchema: {
           type: 'object',
           properties: {
             browserType: {
               type: 'string',
               enum: ['chromium', 'firefox', 'webkit'],
-              description: 'Browser type',
+              description: 'Browser engine. Use "chromium" for best compatibility.',
               default: 'chromium'
             },
             headless: {
               type: 'boolean',
-              description: 'Whether to run in headless mode',
+              description: 'Run without visible window. Set to false for better anti-detection.',
               default: true
             },
             viewport: {
@@ -61,26 +190,35 @@ export class BrowserTools {
                 width: { type: 'number', default: 1280 },
                 height: { type: 'number', default: 720 }
               },
-              description: 'Viewport size'
+              description: 'Fixed viewport size. Omit or set to null for natural viewport (better anti-detection).'
             },
             userAgent: {
               type: 'string',
-              description: 'User agent string'
+              description: 'Custom user agent. Not recommended - browser default is less detectable.'
             },
             metadata: {
               type: 'object',
               properties: {
-                name: { type: 'string', description: 'Instance name' },
-                description: { type: 'string', description: 'Instance description' },
-                tags: { type: 'array', items: { type: 'string' }, description: 'Tags' }
+                name: { type: 'string', description: 'Human-readable name for this instance' },
+                description: { type: 'string', description: 'What this instance is used for' },
+                tags: { type: 'array', items: { type: 'string' }, description: 'Tags for filtering (e.g., ["shopping", "temu"])' }
               },
-              description: 'Instance metadata'
+              description: 'Optional metadata to identify the instance in browser_list_instances'
             },
             storageStatePath: {
               type: 'string',
-              description: 'Path to a JSON file containing saved session state (cookies, localStorage). If file exists, session will be restored.'
+              description: 'Path to JSON file from browser_save_session. Restores cookies and localStorage to skip login.'
             }
           }
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: { type: 'string', description: 'Unique identifier for this browser instance' },
+            browserType: { type: 'string' },
+            createdAt: { type: 'string', description: 'ISO timestamp' }
+          },
+          required: ['instanceId']
         }
       },
       {
@@ -99,6 +237,82 @@ export class BrowserTools {
             }
           },
           required: ['instanceId', 'filePath']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            filePath: { type: 'string' },
+            saved: { type: 'boolean' }
+          },
+          required: ['filePath', 'saved']
+        }
+      },
+
+      // Zero-config global profile tools
+      {
+        name: 'browser_create_global',
+        description: 'Create a page in the global persistent browser profile. Zero-config: auto-applies anti-detection based on learned domain protection levels, sessions persist automatically across all repos. Use this instead of browser_create_instance for best anti-detection.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            url: {
+              type: 'string',
+              description: 'Optional URL to navigate to after creating the page'
+            }
+          }
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            pageId: { type: 'string', description: 'Unique identifier for this page (use instead of instanceId)' },
+            url: { type: 'string' },
+            protectionLevel: { type: 'number', description: 'Current protection level (0-3) for this domain' },
+            settings: {
+              type: 'object',
+              properties: {
+                humanize: { type: 'boolean' },
+                headless: { type: 'boolean' }
+              }
+            },
+            profileDir: { type: 'string', description: 'Path to persistent Chrome profile' }
+          },
+          required: ['pageId']
+        }
+      },
+      {
+        name: 'browser_get_protection_level',
+        description: 'Get the current protection level for a domain. Levels: 0=standard, 1=humanize, 2=visible+delays, 3=aggressive',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            url: {
+              type: 'string',
+              description: 'URL or domain to check'
+            }
+          },
+          required: ['url']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            domain: { type: 'string' },
+            level: { type: 'number' },
+            settings: { type: 'object' }
+          }
+        }
+      },
+      {
+        name: 'browser_reset_protection',
+        description: 'Reset protection level for a domain back to 0 (standard)',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            url: {
+              type: 'string',
+              description: 'URL or domain to reset'
+            }
+          },
+          required: ['url']
         }
       },
       {
@@ -107,6 +321,26 @@ export class BrowserTools {
         inputSchema: {
           type: 'object',
           properties: {}
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            instances: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  createdAt: { type: 'string' },
+                  lastUsed: { type: 'string' },
+                  isActive: { type: 'boolean' },
+                  metadata: { type: 'object' }
+                }
+              }
+            },
+            count: { type: 'number' }
+          },
+          required: ['instances', 'count']
         }
       },
       {
@@ -121,6 +355,14 @@ export class BrowserTools {
             }
           },
           required: ['instanceId']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            closed: { type: 'boolean' },
+            instanceId: { type: 'string' }
+          },
+          required: ['closed']
         }
       },
       {
@@ -129,6 +371,13 @@ export class BrowserTools {
         inputSchema: {
           type: 'object',
           properties: {}
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            closed: { type: 'number', description: 'Number of instances closed' }
+          },
+          required: ['closed']
         }
       },
 
@@ -160,6 +409,14 @@ export class BrowserTools {
             }
           },
           required: ['instanceId', 'url']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            url: { type: 'string', description: 'Current URL after navigation' },
+            title: { type: 'string', description: 'Page title' }
+          },
+          required: ['url', 'title']
         }
       },
       {
@@ -208,17 +465,17 @@ export class BrowserTools {
       // Page interaction tools
       {
         name: 'browser_click',
-        description: 'Click on a page element',
+        description: 'Click on a page element. Use CSS selectors (e.g., "#btn", ".class") or ARIA refs from browser_snapshot (e.g., "aria-ref=e14").',
         inputSchema: {
           type: 'object',
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID from browser_create_instance or browser_list_instances'
             },
             selector: {
               type: 'string',
-              description: 'Element selector',
+              description: 'CSS selector ("#id", ".class", "button") or ARIA ref from snapshot ("aria-ref=e14")',
             },
             button: {
               type: 'string',
@@ -242,12 +499,23 @@ export class BrowserTools {
               default: 30000
             },
             humanize: {
-              type: 'boolean',
-              description: 'Use human-like mouse movement with Bezier curves and Fitts\' Law timing',
+              type: ['boolean', 'string'],
+              enum: [true, false, 'auto'],
+              description: 'Use human-like mouse movement: true (always), false (never), or "auto" (only when detection signals are found like Cloudflare, CAPTCHAs, rate limits)',
               default: false
             }
           },
           required: ['instanceId', 'selector']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            selector: { type: 'string' },
+            clicked: { type: 'boolean' },
+            humanized: { type: 'boolean' },
+            autoDetected: { type: 'boolean' }
+          },
+          required: ['selector', 'clicked']
         }
       },
       {
@@ -279,12 +547,24 @@ export class BrowserTools {
               default: 30000
             },
             humanize: {
-              type: 'boolean',
-              description: 'Use human-like typing with random delays (30-150ms) and occasional typos (~2%)',
+              type: ['boolean', 'string'],
+              enum: [true, false, 'auto'],
+              description: 'Use human-like typing: true (always), false (never), or "auto" (only when detection signals are found)',
               default: false
             }
           },
           required: ['instanceId', 'selector', 'text']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            selector: { type: 'string' },
+            text: { type: 'string' },
+            typed: { type: 'boolean' },
+            humanized: { type: 'boolean' },
+            autoDetected: { type: 'boolean' }
+          },
+          required: ['selector', 'typed']
         }
       },
       {
@@ -311,8 +591,9 @@ export class BrowserTools {
               default: 30000
             },
             humanize: {
-              type: 'boolean',
-              description: 'Use human-like typing with random delays and occasional typos',
+              type: ['boolean', 'string'],
+              enum: [true, false, 'auto'],
+              description: 'Use human-like typing: true (always), false (never), or "auto" (only when detection signals are found)',
               default: false
             }
           },
@@ -372,8 +653,9 @@ export class BrowserTools {
               description: 'Optional: scroll to bring this element into view'
             },
             humanize: {
-              type: 'boolean',
-              description: 'Use physics-based scrolling with momentum, overshoot, and micro-pauses',
+              type: ['boolean', 'string'],
+              enum: [true, false, 'auto'],
+              description: 'Use physics-based scrolling: true (always), false (never), or "auto" (only when detection signals are found)',
               default: false
             },
             timeout: {
@@ -389,7 +671,7 @@ export class BrowserTools {
       // Page information tools
       {
         name: 'browser_get_page_info',
-        description: 'Get detailed page information including full HTML content, page statistics, and metadata',
+        description: 'Get page info with FULL HTML content. WARNING: HTML can be ~90k tokens. Prefer browser_snapshot (~2-8k) or browser_get_markdown (~2k) for content extraction.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -455,7 +737,7 @@ export class BrowserTools {
       // Screenshot tool
       {
         name: 'browser_screenshot',
-        description: 'Take a screenshot of the page or element',
+        description: 'Take a screenshot of the page or element. WARNING: Screenshots consume ~50-100k tokens. Prefer browser_snapshot (ARIA tree, ~2-8k tokens) when possible.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -487,6 +769,15 @@ export class BrowserTools {
             }
           },
           required: ['instanceId']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            screenshot: { type: 'string', description: 'Base64-encoded image data' },
+            type: { type: 'string', enum: ['png', 'jpeg'] },
+            selector: { type: 'string' }
+          },
+          required: ['screenshot', 'type']
         }
       },
 
@@ -601,34 +892,45 @@ export class BrowserTools {
             }
           },
           required: ['instanceId']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            snapshot: { type: 'string', description: 'YAML representation of accessibility tree' },
+            url: { type: 'string' },
+            title: { type: 'string' },
+            selector: { type: 'string' },
+            snapshotLength: { type: 'number' }
+          },
+          required: ['snapshot', 'url', 'title']
         }
       },
 
       // Batch execution tool - Execute multiple operations in sequence
       {
         name: 'browser_batch_execute',
-        description: 'Execute multiple browser operations in sequence. Saves ~90% tokens compared to individual calls. Ideal for form filling, multi-step navigation, or any workflow with 2+ known steps.',
+        description: 'Execute multiple browser operations in sequence. Saves ~20% tokens compared to individual calls. Ideal for form filling, multi-step navigation, or any workflow with 2+ known steps.',
         inputSchema: {
           type: 'object',
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID'
+              description: 'Instance ID from browser_create_instance'
             },
             steps: {
               type: 'array',
-              description: 'Array of operations to execute in sequence',
+              description: 'Operations to execute. Args per action: navigate({url}), click({selector}), type({selector,text}), fill({selector,value}), evaluate({script}), wait({selector} or {ms}), snapshot({})',
               items: {
                 type: 'object',
                 properties: {
                   action: {
                     type: 'string',
                     enum: ['navigate', 'click', 'type', 'fill', 'evaluate', 'wait', 'snapshot'],
-                    description: 'Action to perform'
+                    description: 'Action: navigate|click|type|fill|evaluate|wait|snapshot'
                   },
                   args: {
                     type: 'object',
-                    description: 'Arguments for the action'
+                    description: 'Action-specific args. Examples: {url:"..."}, {selector:"#btn"}, {selector:"#input",text:"hello"}, {script:"return document.title"}, {ms:1000}'
                   },
                   continueOnError: {
                     type: 'boolean',
@@ -651,19 +953,52 @@ export class BrowserTools {
             }
           },
           required: ['instanceId', 'steps']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            completedSteps: { type: 'number' },
+            totalSteps: { type: 'number' },
+            results: { type: 'array', items: { type: 'object' } },
+            lastResult: { type: 'object' },
+            allSuccessful: { type: 'boolean' }
+          },
+          required: ['completedSteps', 'totalSteps', 'allSuccessful']
         }
       }
     ];
   }
 
   /**
-   * Execute tools
+   * Get rate limiter status
    */
-  async executeTools(name: string, args: any): Promise<ToolResult> {
+  getRateLimitStatus() {
+    return this.rateLimiter.getStatus();
+  }
+
+  /**
+   * Execute tools with MCP-compliant response format
+   */
+  async executeTools(name: string, args: any): Promise<CallToolResult> {
+    // Check rate limit
+    if (!this.rateLimiter.isAllowed()) {
+      const status = this.rateLimiter.getStatus();
+      return {
+        content: [{
+          type: 'text',
+          text: `Rate limit exceeded. Try again in ${Math.ceil(status.resetMs / 1000)} seconds.`
+        }],
+        isError: true,
+      };
+    }
+
     try {
+      let result: ToolResult;
+      let isImageResult = false;
+
       switch (name) {
         case 'browser_create_instance':
-          return await this.browserManager.createInstance(
+          result = await this.browserManager.createInstance(
             {
               browserType: args.browserType || 'chromium',
               headless: args.headless ?? true,
@@ -673,124 +1008,262 @@ export class BrowserTools {
             },
             args.metadata
           );
+          break;
 
         case 'browser_save_session':
-          return await this.browserManager.saveSessionState(args.instanceId, args.filePath);
+          result = await this.browserManager.saveSessionState(args.instanceId, args.filePath);
+          break;
+
+        case 'browser_create_global':
+          result = await this.createGlobalPage(args.url);
+          break;
+
+        case 'browser_get_protection_level':
+          result = this.getProtectionLevel(args.url);
+          break;
+
+        case 'browser_reset_protection':
+          result = this.resetProtection(args.url);
+          break;
 
         case 'browser_list_instances':
-          return this.browserManager.listInstances();
+          result = this.browserManager.listInstances();
+          break;
 
         case 'browser_close_instance':
-          return await this.browserManager.closeInstance(args.instanceId);
+          result = await this.browserManager.closeInstance(args.instanceId);
+          break;
 
         case 'browser_close_all_instances':
-          return await this.browserManager.closeAllInstances();
+          result = await this.browserManager.closeAllInstances();
+          break;
 
         case 'browser_navigate':
-          return await this.navigate(args.instanceId, args.url, {
+          result = await this.navigate(args.instanceId, args.url, {
             timeout: args.timeout || 30000,
             waitUntil: args.waitUntil || 'load'
           });
+          break;
 
         case 'browser_go_back':
-          return await this.goBack(args.instanceId);
+          result = await this.goBack(args.instanceId);
+          break;
 
         case 'browser_go_forward':
-          return await this.goForward(args.instanceId);
+          result = await this.goForward(args.instanceId);
+          break;
 
         case 'browser_refresh':
-          return await this.refresh(args.instanceId);
+          result = await this.refresh(args.instanceId);
+          break;
 
         case 'browser_click':
-          return await this.click(args.instanceId, args.selector, {
+          result = await this.click(args.instanceId, args.selector, {
             button: args.button || 'left',
             clickCount: args.clickCount || 1,
             delay: args.delay || 0,
             timeout: args.timeout || 30000,
             humanize: args.humanize || false
           });
+          break;
 
         case 'browser_type':
-          return await this.type(args.instanceId, args.selector, args.text, {
+          result = await this.type(args.instanceId, args.selector, args.text, {
             delay: args.delay || 0,
             timeout: args.timeout || 30000,
             humanize: args.humanize || false
           });
+          break;
 
         case 'browser_fill':
-          return await this.fill(args.instanceId, args.selector, args.value, {
+          result = await this.fill(args.instanceId, args.selector, args.value, {
             timeout: args.timeout || 30000,
             humanize: args.humanize || false
           });
+          break;
 
         case 'browser_select_option':
-          return await this.selectOption(args.instanceId, args.selector, args.value, args.timeout || 30000);
+          result = await this.selectOption(args.instanceId, args.selector, args.value, args.timeout || 30000);
+          break;
 
         case 'browser_scroll':
-          return await this.scroll(args.instanceId, {
+          result = await this.scroll(args.instanceId, {
             direction: args.direction || 'down',
             amount: args.amount || 300,
             selector: args.selector,
             humanize: args.humanize || false,
             timeout: args.timeout || 30000
           });
+          break;
 
         case 'browser_get_page_info':
-          return await this.getPageInfo(args.instanceId);
+          result = await this.getPageInfo(args.instanceId);
+          break;
 
         case 'browser_get_element_text':
-          return await this.getElementText(args.instanceId, args.selector, args.timeout || 30000);
+          result = await this.getElementText(args.instanceId, args.selector, args.timeout || 30000);
+          break;
 
         case 'browser_get_element_attribute':
-          return await this.getElementAttribute(args.instanceId, args.selector, args.attribute, args.timeout || 30000);
+          result = await this.getElementAttribute(args.instanceId, args.selector, args.attribute, args.timeout || 30000);
+          break;
 
         case 'browser_screenshot':
-          return await this.screenshot(args.instanceId, {
+          result = await this.screenshot(args.instanceId, {
             fullPage: args.fullPage || false,
             type: args.type || 'png',
             quality: args.quality || 80
           }, args.selector);
+          isImageResult = true;
+          break;
 
         case 'browser_wait_for_element':
-          return await this.waitForElement(args.instanceId, args.selector, args.timeout || 30000);
+          result = await this.waitForElement(args.instanceId, args.selector, args.timeout || 30000);
+          break;
 
         case 'browser_wait_for_navigation':
-          return await this.waitForNavigation(args.instanceId, args.timeout || 30000);
+          result = await this.waitForNavigation(args.instanceId, args.timeout || 30000);
+          break;
 
         case 'browser_evaluate':
-          return await this.evaluate(args.instanceId, args.script);
+          result = await this.evaluate(args.instanceId, args.script);
+          break;
 
         case 'browser_get_markdown':
-          return await this.getMarkdown(args.instanceId, {
+          result = await this.getMarkdown(args.instanceId, {
             includeLinks: args.includeLinks ?? true,
             maxLength: args.maxLength || 10000,
             selector: args.selector
           });
+          break;
 
         case 'browser_snapshot':
-          return await this.getSnapshot(args.instanceId, args.selector);
+          result = await this.getSnapshot(args.instanceId, args.selector);
+          break;
 
         case 'browser_batch_execute':
-          return await this.batchExecute(args.instanceId, args.steps, {
+          result = await this.batchExecute(args.instanceId, args.steps, {
             stopOnFirstError: args.stopOnFirstError ?? true,
             returnOnlyFinal: args.returnOnlyFinal ?? false
           });
+          break;
 
         default:
-          return {
+          result = {
             success: false,
             error: `Unknown tool: ${name}`
           };
       }
+
+      return this.toMcpResult(result, { isImage: isImageResult });
     } catch (error) {
       return {
-        success: false,
-        error: `Tool execution failed: ${error instanceof Error ? error.message : error}`
+        content: [{
+          type: 'text',
+          text: `Tool execution failed: ${error instanceof Error ? error.message : error}`
+        }],
+        isError: true,
       };
     }
   }
 
-  // Implementation of specific tool methods
+  // ============= Global Profile Methods =============
+
+  /**
+   * Create a page in the global persistent profile
+   * Zero-config: auto-applies protection settings based on domain
+   */
+  private async createGlobalPage(url?: string): Promise<ToolResult> {
+    try {
+      const { pageId, page } = await this.globalProfile.createPage();
+      this.globalPages.set(pageId, page);
+
+      let protectionLevel = 0;
+      let settings = this.domainIntelligence.getSettings('default');
+
+      // Navigate if URL provided
+      if (url) {
+        const domain = this.domainIntelligence.getRootDomain(url);
+        protectionLevel = this.domainIntelligence.getLevel(url);
+        settings = this.domainIntelligence.getSettings(url);
+
+        console.log(`[GlobalProfile] Creating page for ${domain} (protection level: ${protectionLevel})`);
+
+        await page.goto(url, { waitUntil: 'load' });
+      }
+
+      return {
+        success: true,
+        data: {
+          pageId,
+          url: page.url(),
+          title: await page.title(),
+          protectionLevel,
+          settings: {
+            humanize: settings.humanizeMouse,
+            headless: settings.headless,
+            delays: settings.delays,
+          },
+          profileDir: this.globalProfile.getProfileDir(),
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to create global page: ${error instanceof Error ? error.message : error}`,
+      };
+    }
+  }
+
+  /**
+   * Get protection level for a domain
+   */
+  private getProtectionLevel(url: string): ToolResult {
+    const domain = this.domainIntelligence.getRootDomain(url);
+    const level = this.domainIntelligence.getLevel(url);
+    const settings = this.domainIntelligence.getSettings(url);
+
+    return {
+      success: true,
+      data: {
+        domain,
+        level,
+        settings: {
+          humanizeMouse: settings.humanizeMouse,
+          humanizeTyping: settings.humanizeTyping,
+          humanizeScroll: settings.humanizeScroll,
+          headless: settings.headless,
+          delays: settings.delays,
+        },
+      },
+    };
+  }
+
+  /**
+   * Reset protection level for a domain
+   */
+  private resetProtection(url: string): ToolResult {
+    const domain = this.domainIntelligence.getRootDomain(url);
+    this.domainIntelligence.resetLevel(url);
+
+    return {
+      success: true,
+      data: {
+        domain,
+        message: `Protection level reset to 0 for ${domain}`,
+      },
+    };
+  }
+
+  /**
+   * Get a global page by ID
+   */
+  getGlobalPage(pageId: string): Page | undefined {
+    return this.globalPages.get(pageId);
+  }
+
+  // ============= Implementation of specific tool methods =============
+
   private async navigate(instanceId: string, url: string, options: NavigationOptions): Promise<ToolResult> {
     const instance = this.browserManager.getInstance(instanceId);
     if (!instance) {
@@ -805,6 +1278,34 @@ export class BrowserTools {
         gotoOptions.timeout = options.timeout;
       }
       await instance.page.goto(url, gotoOptions);
+
+      // Check for detection signals after navigation
+      const detectionResult = await this.detectionMonitor.checkPage(instance.page);
+
+      if (detectionResult.detected) {
+        // Report detection to domain intelligence
+        const newLevel = this.domainIntelligence.reportDetection(url);
+        console.log(`[Navigate] Detection on ${url}: ${detectionResult.type} (new level: ${newLevel})`);
+
+        return {
+          success: true,
+          data: {
+            url: instance.page.url(),
+            title: await instance.page.title(),
+            detection: {
+              detected: true,
+              type: detectionResult.type,
+              details: detectionResult.details,
+              newProtectionLevel: newLevel,
+            },
+          },
+          instanceId
+        };
+      }
+
+      // Report success
+      this.domainIntelligence.reportSuccess(url);
+
       return {
         success: true,
         data: { url: instance.page.url(), title: await instance.page.title() },
@@ -892,12 +1393,16 @@ export class BrowserTools {
     }
 
     try {
-      if (this.shouldHumanize('mouse', options.humanize)) {
+      // Check if humanize should be enabled (supports "auto" mode with detection)
+      const useHumanize = await this.shouldHumanizeAsync(instance.page, 'mouse', options.humanize);
+
+      if (useHumanize) {
         // Use human-like mouse movement with Bezier curves
         await humanClick(instance.page, selector);
+        const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.mouse === 'auto';
         return {
           success: true,
-          data: { selector, clicked: true, humanized: true },
+          data: { selector, clicked: true, humanized: true, autoDetected: detectionTriggered },
           instanceId
         };
       }
@@ -931,12 +1436,16 @@ export class BrowserTools {
     }
 
     try {
-      if (this.shouldHumanize('typing', options.humanize)) {
+      // Check if humanize should be enabled (supports "auto" mode with detection)
+      const useHumanize = await this.shouldHumanizeAsync(instance.page, 'typing', options.humanize);
+
+      if (useHumanize) {
         // Use human-like typing with delays and occasional typos
         await humanTypeInElement(instance.page, selector, text);
+        const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.typing === 'auto';
         return {
           success: true,
-          data: { selector, text, typed: true, humanized: true },
+          data: { selector, text, typed: true, humanized: true, autoDetected: detectionTriggered },
           instanceId
         };
       }
@@ -960,22 +1469,26 @@ export class BrowserTools {
     }
   }
 
-  private async fill(instanceId: string, selector: string, value: string, options: { timeout: number; humanize?: boolean }): Promise<ToolResult> {
+  private async fill(instanceId: string, selector: string, value: string, options: { timeout: number; humanize?: HumanizeMode }): Promise<ToolResult> {
     const instance = this.browserManager.getInstance(instanceId);
     if (!instance) {
       return { success: false, error: `Instance ${instanceId} not found` };
     }
 
     try {
-      if (this.shouldHumanize('typing', options.humanize)) {
+      // Check if humanize should be enabled (supports "auto" mode with detection)
+      const useHumanize = await this.shouldHumanizeAsync(instance.page, 'typing', options.humanize);
+
+      if (useHumanize) {
         // Clear field first, then use human-like typing
         await instance.page.click(selector);
         await instance.page.keyboard.press('Control+a');
         await instance.page.keyboard.press('Backspace');
         await humanType(instance.page, value);
+        const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.typing === 'auto';
         return {
           success: true,
-          data: { selector, value, filled: true, humanized: true },
+          data: { selector, value, filled: true, humanized: true, autoDetected: detectionTriggered },
           instanceId
         };
       }
@@ -1028,7 +1541,9 @@ export class BrowserTools {
       const direction = options.direction || 'down';
       const amount = options.amount || 300;
 
-      const useHumanScroll = this.shouldHumanize('scroll', options.humanize);
+      // Check if humanize should be enabled (supports "auto" mode with detection)
+      const useHumanScroll = await this.shouldHumanizeAsync(instance.page, 'scroll', options.humanize);
+      const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.scroll === 'auto';
 
       // If selector provided, scroll to element
       if (options.selector) {
@@ -1039,7 +1554,7 @@ export class BrowserTools {
         }
         return {
           success: true,
-          data: { scrolledTo: options.selector, humanized: useHumanScroll },
+          data: { scrolledTo: options.selector, humanized: useHumanScroll, autoDetected: detectionTriggered && useHumanScroll },
           instanceId
         };
       }
@@ -1091,6 +1606,7 @@ export class BrowserTools {
           direction,
           amount: direction === 'top' || direction === 'bottom' ? null : amount,
           humanized: useHumanScroll,
+          autoDetected: detectionTriggered && useHumanScroll,
           scrollPosition
         },
         instanceId

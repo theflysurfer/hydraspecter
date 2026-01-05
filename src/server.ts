@@ -19,8 +19,8 @@ export class ConcurrentBrowserServer {
   constructor(config: ServerConfig) {
     this.server = new Server(
       {
-        name: 'concurrent-browser-mcp',
-        version: '1.0.0',
+        name: 'hydraspecter',
+        version: '2.0.0',
       },
       {
         capabilities: {
@@ -30,7 +30,16 @@ export class ConcurrentBrowserServer {
     );
 
     this.browserManager = new BrowserManager(config);
-    this.browserTools = new BrowserTools(this.browserManager, config.humanize);
+    this.browserTools = new BrowserTools(
+      this.browserManager,
+      config.humanize,
+      config.rateLimit,
+      {
+        profileDir: config.globalProfile?.profileDir,
+        headless: config.globalProfile?.headless ?? false, // Default: visible for anti-detection
+        channel: config.globalProfile?.channel,
+      }
+    );
 
     this.setupHandlers();
   }
@@ -49,20 +58,9 @@ export class ConcurrentBrowserServer {
       const { name, arguments: args } = request.params;
 
       try {
+        // executeTools now returns MCP-compliant format directly
         const result = await this.browserTools.executeTools(name, args || {});
-        
-        if (result.success) {
-          return {
-            content: [
-              {
-                type: 'text',
-                text: JSON.stringify(result.data, null, 2),
-              },
-            ],
-          };
-        } else {
-          throw new McpError(ErrorCode.InternalError, result.error || 'Tool execution failed');
-        }
+        return result;
       } catch (error) {
         if (error instanceof McpError) {
           throw error;
@@ -91,7 +89,7 @@ export class ConcurrentBrowserServer {
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('Concurrent Browser MCP Server started');
+    console.error('HydraSpecter MCP Server started');
   }
 
   async shutdown() {

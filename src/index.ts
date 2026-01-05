@@ -8,9 +8,9 @@ import { ServerConfig } from './types.js';
 const program = new Command();
 
 program
-  .name('concurrent-browser-mcp')
-  .description('A multi-concurrent browser MCP server')
-  .version('1.0.0');
+  .name('hydraspecter')
+  .description('Multi-headed browser automation MCP - stealth, concurrent, unstoppable')
+  .version('2.0.0');
 
 program
   .option('-m, --max-instances <number>', 'Maximum number of instances', (value) => parseInt(value), defaultConfig.maxInstances)
@@ -29,10 +29,17 @@ program
   .option('--proxy <string>', 'Proxy server (e.g., http://127.0.0.1:7890)')
   .option('--no-proxy-auto-detect', 'Disable automatic proxy detection')
   .option('--humanize', 'Enable all human-like behaviors by default (mouse, typing, scroll)')
+  .option('--humanize-auto', 'Enable adaptive humanize: activates only when detection signals are found (Cloudflare, CAPTCHAs, rate limits)')
   .option('--humanize-mouse', 'Enable human-like mouse movement by default')
   .option('--humanize-typing', 'Enable human-like typing by default')
   .option('--humanize-scroll', 'Enable human-like scrolling by default')
+  .option('--always-humanize-domains <domains>', 'Comma-separated list of domains to always humanize (e.g., temu.com,amazon.com)')
   .option('--typo-rate <number>', 'Typo rate for human typing (0-1)', (value) => parseFloat(value), 0.02)
+  .option('--rate-limit <number>', 'Enable rate limiting with max requests per window', (value) => parseInt(value))
+  .option('--rate-limit-window <number>', 'Rate limit window in seconds (default: 60)', (value) => parseInt(value) * 1000, 60000)
+  .option('--profile-dir <path>', 'Global profile directory (default: ~/.hydraspecter/profile/)')
+  .option('--global-headless', 'Run global profile browser in headless mode (default: false for anti-detection)', false)
+  .option('--global-channel <channel>', 'Browser channel for global profile: chrome, msedge')
   .action(async (options) => {
     // Build configuration
     // Determine viewport: null for natural, or specified dimensions
@@ -62,16 +69,30 @@ program
         autoDetect: options.proxyAutoDetect !== false, // Enable by default unless explicitly disabled
       },
       humanize: {
-        mouse: options.humanize || options.humanizeMouse || false,
-        typing: options.humanize || options.humanizeTyping || false,
-        scroll: options.humanize || options.humanizeScroll || false,
+        // Priority: --humanize-auto > --humanize > --humanize-<type>
+        mouse: options.humanizeAuto ? 'auto' : (options.humanize || options.humanizeMouse || false),
+        typing: options.humanizeAuto ? 'auto' : (options.humanize || options.humanizeTyping || false),
+        scroll: options.humanizeAuto ? 'auto' : (options.humanize || options.humanizeScroll || false),
         typoRate: options.typoRate,
+        alwaysHumanizeDomains: options.alwaysHumanizeDomains
+          ? options.alwaysHumanizeDomains.split(',').map((d: string) => d.trim())
+          : undefined,
+      },
+      rateLimit: options.rateLimit ? {
+        enabled: true,
+        maxRequests: options.rateLimit,
+        windowMs: options.rateLimitWindow,
+      } : undefined,
+      globalProfile: {
+        profileDir: options.profileDir,
+        headless: options.globalHeadless || false, // Default: visible for anti-detection
+        channel: options.globalChannel as 'chrome' | 'msedge' | undefined,
       },
     };
 
     // Start server
     try {
-      console.error(chalk.blue('🚀 Starting Concurrent Browser MCP Server (Stealth Mode)'));
+      console.error(chalk.blue('🚀 Starting HydraSpecter MCP Server'));
       console.error(chalk.gray(`Max instances: ${config.maxInstances}`));
       console.error(chalk.gray(`Default browser: ${config.defaultBrowserConfig.browserType}`));
       if (config.defaultBrowserConfig.channel) {
@@ -100,15 +121,40 @@ program
       // Display humanize configuration
       const humanizeEnabled = config.humanize?.mouse || config.humanize?.typing || config.humanize?.scroll;
       if (humanizeEnabled) {
+        const isAutoMode = config.humanize?.mouse === 'auto';
         const enabledFeatures: string[] = [];
         if (config.humanize?.mouse) enabledFeatures.push('mouse');
         if (config.humanize?.typing) enabledFeatures.push('typing');
         if (config.humanize?.scroll) enabledFeatures.push('scroll');
-        console.error(chalk.green(`Humanize: ${enabledFeatures.join(', ')} (anti-detection)`));
+
+        if (isAutoMode) {
+          console.error(chalk.cyan(`Humanize: AUTO mode - ${enabledFeatures.join(', ')} (activates on detection)`));
+          console.error(chalk.gray('  Detects: Cloudflare, CAPTCHAs, DataDome, PerimeterX, rate limits'));
+        } else {
+          console.error(chalk.green(`Humanize: ${enabledFeatures.join(', ')} (anti-detection)`));
+        }
+
         if (config.humanize?.typoRate && config.humanize.typoRate !== 0.02) {
           console.error(chalk.gray(`  Typo rate: ${(config.humanize.typoRate * 100).toFixed(1)}%`));
         }
+        if (config.humanize?.alwaysHumanizeDomains?.length) {
+          console.error(chalk.gray(`  Always humanize: ${config.humanize.alwaysHumanizeDomains.join(', ')}`));
+        }
       }
+
+      // Display rate limit configuration
+      if (config.rateLimit?.enabled) {
+        console.error(chalk.yellow(`Rate limit: ${config.rateLimit.maxRequests} requests per ${config.rateLimit.windowMs / 1000}s`));
+      }
+
+      // Display global profile configuration
+      console.error(chalk.magenta('Global Profile (zero-config sessions):'));
+      console.error(chalk.gray(`  Profile dir: ${config.globalProfile?.profileDir || '~/.hydraspecter/profile/'}`));
+      console.error(chalk.gray(`  Headless: ${config.globalProfile?.headless ? 'yes' : 'no (anti-detection)'}`));
+      if (config.globalProfile?.channel) {
+        console.error(chalk.green(`  Browser: ${config.globalProfile.channel}`));
+      }
+      console.error(chalk.gray('  Domain intelligence: auto-learning protection levels'));
       console.error('');
 
       const server = new ConcurrentBrowserServer(config);
@@ -127,47 +173,56 @@ program
     console.log(chalk.bold('\n📚 Usage Examples:\n'));
     
     console.log(chalk.yellow('1. Start server (default configuration):'));
-    console.log(chalk.gray('  npx concurrent-browser-mcp\n'));
-    
+    console.log(chalk.gray('  npx hydraspecter\n'));
+
     console.log(chalk.yellow('2. Start server (custom configuration):'));
-    console.log(chalk.gray('  npx concurrent-browser-mcp --max-instances 25 --browser firefox --headless false\n'));
-    
+    console.log(chalk.gray('  npx hydraspecter --max-instances 25 --browser firefox --headless false\n'));
+
     console.log(chalk.yellow('3. Start server with proxy:'));
-    console.log(chalk.gray('  npx concurrent-browser-mcp --proxy http://127.0.0.1:7890\n'));
-    
+    console.log(chalk.gray('  npx hydraspecter --proxy http://127.0.0.1:7890\n'));
+
     console.log(chalk.yellow('4. Start server without proxy auto-detection:'));
-    console.log(chalk.gray('  npx concurrent-browser-mcp --no-proxy-auto-detect\n'));
+    console.log(chalk.gray('  npx hydraspecter --no-proxy-auto-detect\n'));
 
     console.log(chalk.yellow('5. Start server with human-like behaviors (anti-detection):'));
-    console.log(chalk.gray('  npx concurrent-browser-mcp --humanize\n'));
+    console.log(chalk.gray('  npx hydraspecter --humanize\n'));
 
-    console.log(chalk.yellow('6. Start server with specific human behaviors:'));
-    console.log(chalk.gray('  npx concurrent-browser-mcp --humanize-mouse --humanize-typing\n'));
+    console.log(chalk.yellow('6. Start server with ADAPTIVE humanize (recommended):'));
+    console.log(chalk.gray('  npx hydraspecter --humanize-auto'));
+    console.log(chalk.gray('  # Only activates humanize when Cloudflare, CAPTCHAs, or rate limits detected\n'));
 
-    console.log(chalk.yellow('7. Use in MCP client:'));
+    console.log(chalk.yellow('7. Start server with specific human behaviors:'));
+    console.log(chalk.gray('  npx hydraspecter --humanize-mouse --humanize-typing\n'));
+
+    console.log(chalk.yellow('8. Use in MCP client:'));
     console.log(chalk.gray('  {'));
     console.log(chalk.gray('    "mcpServers": {'));
-    console.log(chalk.gray('      "concurrent-browser": {'));
+    console.log(chalk.gray('      "hydraspecter": {'));
     console.log(chalk.gray('        "command": "npx",'));
-    console.log(chalk.gray('        "args": ["concurrent-browser-mcp", "--max-instances", "20", "--proxy", "http://127.0.0.1:7890"]'));
+    console.log(chalk.gray('        "args": ["hydraspecter", "--max-instances", "20", "--proxy", "http://127.0.0.1:7890"]'));
     console.log(chalk.gray('      }'));
     console.log(chalk.gray('    }'));
     console.log(chalk.gray('  }\n'));
     
-    console.log(chalk.yellow('8. Available tools include:'));
+    console.log(chalk.yellow('9. Zero-config tools (recommended):'));
+    console.log(chalk.gray('  - browser_create_global: Create page with global profile (auto session + anti-detection)'));
+    console.log(chalk.gray('  - browser_get_protection_level: Check domain protection level'));
+    console.log(chalk.gray('  - browser_reset_protection: Reset domain protection to level 0\n'));
+
+    console.log(chalk.yellow('10. Standard tools:'));
     console.log(chalk.gray('  - browser_create_instance: Create browser instance'));
     console.log(chalk.gray('  - browser_list_instances: List all instances'));
-    console.log(chalk.gray('  - browser_navigate: Navigate to URL'));
-    console.log(chalk.gray('  - browser_click: Click element (humanize option)'));
-    console.log(chalk.gray('  - browser_type: Type text (humanize option)'));
-    console.log(chalk.gray('  - browser_fill: Fill form field (humanize option)'));
-    console.log(chalk.gray('  - browser_scroll: Scroll page (humanize option)'));
+    console.log(chalk.gray('  - browser_navigate: Navigate to URL (with detection feedback)'));
+    console.log(chalk.gray('  - browser_click: Click element (humanize: true/false/auto)'));
+    console.log(chalk.gray('  - browser_type: Type text (humanize: true/false/auto)'));
+    console.log(chalk.gray('  - browser_fill: Fill form field (humanize: true/false/auto)'));
+    console.log(chalk.gray('  - browser_scroll: Scroll page (humanize: true/false/auto)'));
     console.log(chalk.gray('  - browser_screenshot: Take screenshot'));
     console.log(chalk.gray('  - browser_snapshot: Get ARIA tree (token-efficient)'));
     console.log(chalk.gray('  - browser_batch_execute: Execute multiple operations'));
     console.log(chalk.gray('  - and more...\n'));
 
-    console.log(chalk.yellow('9. Test real functionality:'));
+    console.log(chalk.yellow('11. Test real functionality:'));
     console.log(chalk.gray('  - Simulation demo: node examples/demo.js'));
     console.log(chalk.gray('  - Real test: node test-real-screenshot.js (generates actual screenshot files)'));
     console.log(chalk.gray('  - View screenshots: open screenshot-*.png\n'));
@@ -179,9 +234,4 @@ program.configureHelp({
   helpWidth: 80,
 });
 
-program.parse();
-
-// Show help if no arguments provided
-if (!process.argv.slice(2).length) {
-  program.outputHelp();
-} 
+program.parse(); 

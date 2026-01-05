@@ -19,7 +19,7 @@ export class BrowserManager {
   constructor(config: ServerConfig) {
     this.config = config;
     this.startCleanupTimer();
-    
+
     // Initialize proxy detection during construction
     this.initializeProxy();
   }
