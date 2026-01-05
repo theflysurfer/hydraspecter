@@ -1,8 +1,9 @@
 #!/bin/bash
 
-# Concurrent Browser MCP Server Installation Script
+# HydraSpecter Installation Script
+# Multi-headed browser automation MCP - stealth, concurrent, unstoppable
 
-echo "🚀 Installing Concurrent Browser MCP Server..."
+echo "🐉 Installing HydraSpecter..."
 echo ""
 
 # Check Node.js version
@@ -68,7 +69,7 @@ npm link
 
 if [ $? -eq 0 ]; then
     echo "✅ Global link created successfully"
-    echo "📝 You can now use 'concurrent-browser-mcp' command"
+    echo "📝 You can now use 'hydraspecter' command"
 else
     echo "⚠️ Global link creation failed, you can use 'node dist/index.js' to run"
 fi
@@ -77,19 +78,19 @@ echo ""
 echo "🎉 Installation completed!"
 echo ""
 echo "📋 Usage:"
-echo "  1. Basic usage: node dist/index.js"
-echo "  2. Show help: node dist/index.js --help"
-echo "  3. Show examples: node dist/index.js example"
-echo "  4. Run demo: node examples/demo.js"
+echo "  1. Basic usage: npx hydraspecter"
+echo "  2. Show help: npx hydraspecter --help"
+echo "  3. Show examples: npx hydraspecter example"
+echo "  4. Stealth mode: npx hydraspecter --humanize-auto --channel chrome"
 echo ""
 echo "🔧 MCP Client configuration example:"
 echo "  {"
 echo "    \"mcpServers\": {"
-echo "      \"concurrent-browser\": {"
+echo "      \"hydraspecter\": {"
 echo "        \"command\": \"node\","
 echo "        \"args\": [\"$(pwd)/dist/index.js\"]"
 echo "      }"
 echo "    }"
 echo "  }"
 echo ""
-echo "🚀 Start using Concurrent Browser MCP Server!" 
+echo "🐉 HydraSpecter is ready to hunt!" 

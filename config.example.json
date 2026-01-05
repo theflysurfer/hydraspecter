@@ -1,16 +1,16 @@
 {
   "mcpServers": {
-    "concurrent-browser": {
+    "hydraspecter": {
       "command": "npx",
-      "args": ["concurrent-browser-mcp", "--max-instances", "20"]
+      "args": ["hydraspecter", "--max-instances", "20"]
     },
-    "concurrent-browser-with-proxy": {
-      "command": "npx", 
-      "args": ["concurrent-browser-mcp", "--max-instances", "20", "--proxy", "http://127.0.0.1:7890"]
-    },
-    "concurrent-browser-no-proxy": {
+    "hydraspecter-with-proxy": {
       "command": "npx",
-      "args": ["concurrent-browser-mcp", "--max-instances", "20", "--no-proxy-auto-detect"]
+      "args": ["hydraspecter", "--max-instances", "20", "--proxy", "http://127.0.0.1:7890"]
+    },
+    "hydraspecter-stealth": {
+      "command": "npx",
+      "args": ["hydraspecter", "--max-instances", "10", "--humanize-auto", "--channel", "chrome"]
     }
   }
 } 

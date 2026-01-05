@@ -1,11 +1,11 @@
 {
-  "name": "concurrent-browser-mcp-stealth",
+  "name": "hydraspecter",
   "version": "2.0.0",
-  "description": "Concurrent browser MCP with stealth mode, ARIA snapshots, batch execution & session persistence. Fork optimized for token efficiency.",
+  "description": "Multi-headed browser automation MCP - stealth mode, concurrent instances, ARIA snapshots, batch execution & session persistence",
   "main": "dist/index.js",
   "type": "module",
   "bin": {
-    "concurrent-browser-mcp-persistent": "dist/index.js"
+    "hydraspecter": "dist/index.js"
   },
   "scripts": {
     "build": "tsc",
@@ -23,20 +23,13 @@
     "playwright",
     "concurrent",
     "stealth",
+    "hydra",
+    "specter",
     "aria-snapshot",
-    "batch-execute",
-    "token-optimization"
+    "batch-execute"
   ],
-  "author": "sailaoda",
+  "author": "julien",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/sailaoda/concurrent-browser-mcp#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/sailaoda/concurrent-browser-mcp.git"
-  },
-  "bugs": {
-    "url": "https://github.com/sailaoda/concurrent-browser-mcp/issues"
-  },
   "files": [
     "dist/**/*",
     "README.md",
