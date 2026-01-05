@@ -251,7 +251,12 @@ export class BrowserTools {
       // Zero-config global profile tools
       {
         name: 'browser_create_global',
-        description: 'Create a page in the global persistent browser profile. Zero-config: auto-applies anti-detection based on learned domain protection levels, sessions persist automatically across all repos. Use this instead of browser_create_instance for best anti-detection.',
+        description: `Create a page in the global persistent browser profile. ZERO-CONFIG SESSION MANAGEMENT:
+• Sessions (cookies, localStorage, IndexedDB) persist AUTOMATICALLY - no save/load needed
+• Google OAuth login persists across ALL sites and repos
+• Anti-detection level auto-applied based on domain history
+• If blocked/detected, protection level increases automatically on retry
+Use this instead of browser_create_instance for sites requiring login or anti-detection.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -264,7 +269,7 @@ export class BrowserTools {
         outputSchema: {
           type: 'object',
           properties: {
-            pageId: { type: 'string', description: 'Unique identifier for this page (use instead of instanceId)' },
+            pageId: { type: 'string', description: 'Unique identifier - use this as instanceId in other tools' },
             url: { type: 'string' },
             protectionLevel: { type: 'number', description: 'Current protection level (0-3) for this domain' },
             settings: {
@@ -281,7 +286,12 @@ export class BrowserTools {
       },
       {
         name: 'browser_get_protection_level',
-        description: 'Get the current protection level for a domain. Levels: 0=standard, 1=humanize, 2=visible+delays, 3=aggressive',
+        description: `Get the current protection level for a domain. Levels are AUTO-LEARNED from detection events:
+• 0 = standard (no humanize, headless)
+• 1 = humanize enabled (mouse, typing, scroll simulation)
+• 2 = visible browser + delays (300-800ms)
+• 3 = aggressive delays (500-1500ms)
+Levels increase automatically when anti-bot detection is encountered.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -295,6 +305,35 @@ export class BrowserTools {
         outputSchema: {
           type: 'object',
           properties: {
+            domain: { type: 'string', description: 'Normalized root domain (e.g., google.com)' },
+            level: { type: 'number', description: 'Protection level 0-3' },
+            settings: { type: 'object', description: 'Applied settings for this level' },
+            lastDetection: { type: 'string', description: 'ISO timestamp of last detection event' },
+            detectionCount: { type: 'number', description: 'Total detection events for this domain' }
+          }
+        }
+      },
+      {
+        name: 'browser_set_protection_level',
+        description: 'Manually set protection level for a domain. Use this to pre-configure known difficult sites or override auto-learned levels.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            url: {
+              type: 'string',
+              description: 'URL or domain to configure'
+            },
+            level: {
+              type: 'number',
+              enum: [0, 1, 2, 3],
+              description: 'Protection level: 0=standard, 1=humanize, 2=visible+delays, 3=aggressive'
+            }
+          },
+          required: ['url', 'level']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
             domain: { type: 'string' },
             level: { type: 'number' },
             settings: { type: 'object' }
@@ -303,7 +342,7 @@ export class BrowserTools {
       },
       {
         name: 'browser_reset_protection',
-        description: 'Reset protection level for a domain back to 0 (standard)',
+        description: 'Reset protection level for a domain back to 0 (standard). Use after site changes or if current level is too aggressive.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -313,6 +352,32 @@ export class BrowserTools {
             }
           },
           required: ['url']
+        }
+      },
+      {
+        name: 'browser_list_domains',
+        description: 'List all domains with learned protection levels. Shows which sites have been accessed and their current anti-detection settings.',
+        inputSchema: {
+          type: 'object',
+          properties: {}
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            domains: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  domain: { type: 'string' },
+                  level: { type: 'number' },
+                  lastSuccess: { type: 'string' },
+                  lastDetection: { type: 'string' },
+                  detectionCount: { type: 'number' }
+                }
+              }
+            }
+          }
         }
       },
       {
@@ -1026,6 +1091,14 @@ export class BrowserTools {
           result = this.resetProtection(args.url);
           break;
 
+        case 'browser_set_protection_level':
+          result = this.setProtectionLevel(args.url, args.level);
+          break;
+
+        case 'browser_list_domains':
+          result = this.listDomains();
+          break;
+
         case 'browser_list_instances':
           result = this.browserManager.listInstances();
           break;
@@ -1251,6 +1324,58 @@ export class BrowserTools {
       data: {
         domain,
         message: `Protection level reset to 0 for ${domain}`,
+      },
+    };
+  }
+
+  /**
+   * Manually set protection level for a domain
+   */
+  private setProtectionLevel(url: string, level: number): ToolResult {
+    if (level < 0 || level > 3) {
+      return {
+        success: false,
+        error: `Invalid protection level: ${level}. Must be 0, 1, 2, or 3.`,
+      };
+    }
+
+    const domain = this.domainIntelligence.getRootDomain(url);
+    this.domainIntelligence.setLevel(url, level as 0 | 1 | 2 | 3);
+    const settings = this.domainIntelligence.getSettings(url);
+
+    return {
+      success: true,
+      data: {
+        domain,
+        level,
+        settings: {
+          humanizeMouse: settings.humanizeMouse,
+          humanizeTyping: settings.humanizeTyping,
+          humanizeScroll: settings.humanizeScroll,
+          headless: settings.headless,
+          delays: settings.delays,
+        },
+      },
+    };
+  }
+
+  /**
+   * List all domains with learned protection levels
+   */
+  private listDomains(): ToolResult {
+    const profiles = this.domainIntelligence.getAllProfiles();
+
+    return {
+      success: true,
+      data: {
+        domains: profiles.map(({ domain, profile }) => ({
+          domain,
+          level: profile.level,
+          lastSuccess: profile.lastSuccess,
+          lastDetection: profile.lastDetection,
+          detectionCount: profile.detectionCount || 0,
+        })),
+        count: profiles.length,
       },
     };
   }
