@@ -1,5 +1,5 @@
 import { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { Page } from 'playwright';
+import { Page, devices, ConsoleMessage, Request, Response } from 'playwright';
 import { BrowserManager } from './browser-manager.js';
 import {
   ToolResult,
@@ -12,6 +12,38 @@ import {
   HumanizeMode,
   RateLimitConfig
 } from './types.js';
+
+/** Console log entry */
+interface ConsoleLogEntry {
+  type: string;
+  text: string;
+  location?: { url: string; lineNumber: number; columnNumber: number };
+  timestamp: number;
+}
+
+/** Network request/response entry */
+interface NetworkEntry {
+  id: string;
+  url: string;
+  method: string;
+  resourceType: string;
+  requestHeaders?: Record<string, string>;
+  postData?: string;
+  status?: number;
+  statusText?: string;
+  responseHeaders?: Record<string, string>;
+  responseSize?: number;
+  timing?: { startTime: number; endTime?: number; duration?: number };
+}
+
+/** Download entry */
+interface DownloadEntry {
+  suggestedFilename: string;
+  url: string;
+  path?: string;
+  status: 'pending' | 'completed' | 'failed';
+  error?: string;
+}
 import { humanClick } from './utils/ghost-cursor.js';
 import { humanType, humanTypeInElement } from './utils/human-typing.js';
 import { humanScrollDown, humanScrollUp, humanScrollToElement, humanScrollToTop, humanScrollToBottom } from './utils/human-scroll.js';
@@ -33,6 +65,14 @@ export class BrowserTools {
   private globalPages: Map<string, Page> = new Map();
   // Map pageId to Browser for incognito contexts (for cleanup)
   private incognitoBrowsers: Map<string, import('playwright').Browser> = new Map();
+  // Console logs storage per instance/page
+  private consoleLogs: Map<string, ConsoleLogEntry[]> = new Map();
+  // Network logs storage per instance/page
+  private networkLogs: Map<string, NetworkEntry[]> = new Map();
+  // Network monitoring enabled flag per instance/page
+  private networkMonitoringEnabled: Set<string> = new Set();
+  // Downloads storage per instance/page
+  private downloads: Map<string, DownloadEntry[]> = new Map();
 
   constructor(
     private browserManager: BrowserManager,
@@ -164,6 +204,152 @@ export class BrowserTools {
   }
 
   /**
+   * Setup console log capture for a page
+   */
+  private setupConsoleCapture(instanceId: string, page: Page): void {
+    if (!this.consoleLogs.has(instanceId)) {
+      this.consoleLogs.set(instanceId, []);
+    }
+
+    page.on('console', (msg: ConsoleMessage) => {
+      const logs = this.consoleLogs.get(instanceId) || [];
+      const location = msg.location();
+      logs.push({
+        type: msg.type(),
+        text: msg.text(),
+        location: location ? {
+          url: location.url,
+          lineNumber: location.lineNumber,
+          columnNumber: location.columnNumber
+        } : undefined,
+        timestamp: Date.now()
+      });
+      // Keep last 1000 logs
+      if (logs.length > 1000) logs.shift();
+      this.consoleLogs.set(instanceId, logs);
+    });
+  }
+
+  /**
+   * Setup network monitoring for a page
+   */
+  private setupNetworkMonitoring(instanceId: string, page: Page): void {
+    if (this.networkMonitoringEnabled.has(instanceId)) return;
+
+    if (!this.networkLogs.has(instanceId)) {
+      this.networkLogs.set(instanceId, []);
+    }
+
+    const requestMap = new Map<string, { entry: NetworkEntry; startTime: number }>();
+
+    page.on('request', (request: Request) => {
+      const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const entry: NetworkEntry = {
+        id,
+        url: request.url(),
+        method: request.method(),
+        resourceType: request.resourceType(),
+        requestHeaders: request.headers(),
+        postData: request.postData() || undefined,
+        timing: { startTime: Date.now() }
+      };
+      requestMap.set(request.url() + request.method(), { entry, startTime: Date.now() });
+    });
+
+    page.on('response', async (response: Response) => {
+      const request = response.request();
+      const key = request.url() + request.method();
+      const pending = requestMap.get(key);
+
+      if (pending) {
+        const endTime = Date.now();
+        pending.entry.status = response.status();
+        pending.entry.statusText = response.statusText();
+        pending.entry.responseHeaders = response.headers();
+        pending.entry.timing = {
+          startTime: pending.startTime,
+          endTime,
+          duration: endTime - pending.startTime
+        };
+
+        // Try to get response size
+        try {
+          const body = await response.body();
+          pending.entry.responseSize = body.length;
+        } catch {
+          // Response body not available
+        }
+
+        const logs = this.networkLogs.get(instanceId) || [];
+        logs.push(pending.entry);
+        // Keep last 500 network entries
+        if (logs.length > 500) logs.shift();
+        this.networkLogs.set(instanceId, logs);
+        requestMap.delete(key);
+      }
+    });
+
+    this.networkMonitoringEnabled.add(instanceId);
+  }
+
+  /**
+   * Setup download handling for a page
+   */
+  private setupDownloadHandling(instanceId: string, page: Page): void {
+    if (!this.downloads.has(instanceId)) {
+      this.downloads.set(instanceId, []);
+    }
+
+    page.on('download', async (download) => {
+      const entry: DownloadEntry = {
+        suggestedFilename: download.suggestedFilename(),
+        url: download.url(),
+        status: 'pending'
+      };
+
+      const downloads = this.downloads.get(instanceId) || [];
+      downloads.push(entry);
+      this.downloads.set(instanceId, downloads);
+
+      try {
+        // Wait for download to complete
+        const path = await download.path();
+        entry.path = path || undefined;
+        entry.status = 'completed';
+      } catch (error) {
+        entry.status = 'failed';
+        entry.error = error instanceof Error ? error.message : String(error);
+      }
+    });
+  }
+
+  /**
+   * Get list of available device names for emulation
+   */
+  getAvailableDevices(): string[] {
+    return Object.keys(devices);
+  }
+
+  /**
+   * Get page by instance ID or page ID
+   * Checks both browserManager instances and globalPages
+   */
+  private async getPage(instanceId: string): Promise<Page | null> {
+    // Check global pages first
+    if (this.globalPages.has(instanceId)) {
+      return this.globalPages.get(instanceId)!;
+    }
+
+    // Check browser manager instances
+    const instance = this.browserManager.getInstance(instanceId);
+    if (instance) {
+      return instance.page;
+    }
+
+    return null;
+  }
+
+  /**
    * Get all tool definitions
    */
   getTools(): Tool[] {
@@ -171,16 +357,20 @@ export class BrowserTools {
       // Instance management tools
       {
         name: 'browser_create_instance',
-        description: `Create an ISOLATED browser instance (no persistent sessions).
+        description: `⚠️ ISOLATED CONTEXT - Sessions are LOST when closed. NO saved logins.
 
-⚠️ IMPORTANT: For sites requiring login (e-commerce, social media, etc.), use browser_create_global instead - it automatically persists sessions.
+🚫 DO NOT USE for: Notion, Google, Amazon, any site where you expect to be logged in.
+✅ USE browser_create_global INSTEAD for authenticated browsing.
 
-Use browser_create_instance only when you need:
-• Complete isolation from other sessions
-• Custom browser settings (Firefox, WebKit)
-• Manual session management via browser_save_session
+This tool creates a FRESH browser with NO cookies, NO saved sessions.
+Every login will need to be done again.
 
-Returns an instanceId to use with other browser_* tools.`,
+Only use browser_create_instance when you specifically need:
+• Complete isolation (different accounts on same site)
+• Non-Chromium browsers (Firefox, WebKit)
+• Device emulation (mobile, tablet)
+
+For 90% of tasks, use browser_create_global which preserves sessions.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -195,17 +385,21 @@ Returns an instanceId to use with other browser_* tools.`,
               description: 'Run without visible window. Set to false for better anti-detection.',
               default: true
             },
+            device: {
+              type: 'string',
+              description: 'Device to emulate (e.g., "iPhone 14", "Pixel 7", "iPad Pro 11"). Sets viewport, userAgent, touch support automatically. Use browser_list_devices for full list.'
+            },
             viewport: {
               type: 'object',
               properties: {
                 width: { type: 'number', default: 1280 },
                 height: { type: 'number', default: 720 }
               },
-              description: 'Fixed viewport size. Omit or set to null for natural viewport (better anti-detection).'
+              description: 'Fixed viewport size. Ignored if device is specified. Omit or set to null for natural viewport.'
             },
             userAgent: {
               type: 'string',
-              description: 'Custom user agent. Not recommended - browser default is less detectable.'
+              description: 'Custom user agent. Ignored if device is specified. Not recommended - browser default is less detectable.'
             },
             metadata: {
               type: 'object',
@@ -219,6 +413,16 @@ Returns an instanceId to use with other browser_* tools.`,
             storageStatePath: {
               type: 'string',
               description: 'Path to JSON file from browser_save_session. Restores cookies and localStorage to skip login.'
+            },
+            enableConsoleCapture: {
+              type: 'boolean',
+              description: 'Enable console log capture. Use browser_get_console_logs to retrieve.',
+              default: false
+            },
+            enableNetworkMonitoring: {
+              type: 'boolean',
+              description: 'Enable network request/response monitoring. Use browser_get_network_logs to retrieve.',
+              default: false
             }
           }
         },
@@ -262,18 +466,21 @@ Returns an instanceId to use with other browser_* tools.`,
       // Zero-config global profile tools
       {
         name: 'browser_create_global',
-        description: `🔑 RECOMMENDED - Create a page with persistent sessions.
+        description: `🔑 DEFAULT CHOICE - Use this for 90% of browsing tasks.
 
-**Use this tool for:**
-• Sites requiring login (e-commerce, social media, email)
-• Any site where you want to stay logged in
-• Google OAuth flows (login once, works everywhere)
+✅ ALREADY LOGGED IN: Notion, Google, Amazon, GitHub, etc. - sessions persist automatically.
+✅ No need to login again - cookies and localStorage are saved.
+
+**ALWAYS use this tool unless you have a specific reason not to.**
 
 **Modes:**
-• session (default): Persistent cookies/localStorage, auto-selects available profile from pool
-• incognito: Fresh context, no stored data
+• session (default): Uses saved logins, cookies persist between sessions
+• incognito: Fresh context for anonymous browsing
 
-**Multi-process:** Uses profile pool (5 profiles). If all in use, returns explicit error with suggestion.
+**Examples:**
+• Notion → Already logged in, will see your workspace
+• Google → Already authenticated
+• Any site you've logged into before → Session restored
 
 Returns pageId to use with other browser_* tools.`,
         inputSchema: {
@@ -473,6 +680,246 @@ Use when:
           }
         }
       },
+
+      // Device emulation
+      {
+        name: 'browser_list_devices',
+        description: `List all available devices for emulation.
+
+Returns device names that can be used with browser_create_instance's device parameter.
+Common devices: "iPhone 14", "iPhone 14 Pro Max", "Pixel 7", "iPad Pro 11", "Galaxy S23".`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            filter: {
+              type: 'string',
+              description: 'Filter devices by name (case-insensitive). E.g., "iphone", "pixel", "ipad"'
+            }
+          }
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            devices: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  name: { type: 'string' },
+                  viewport: { type: 'object' },
+                  userAgent: { type: 'string' },
+                  isMobile: { type: 'boolean' },
+                  hasTouch: { type: 'boolean' }
+                }
+              }
+            },
+            count: { type: 'number' }
+          }
+        }
+      },
+
+      // Console logs
+      {
+        name: 'browser_get_console_logs',
+        description: `Get captured console logs from a page.
+
+Console capture must be enabled when creating the instance (enableConsoleCapture: true) or use browser_enable_console_capture.
+
+Returns: log entries with type (log, warn, error, info, debug), text, location, and timestamp.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            },
+            filter: {
+              type: 'string',
+              enum: ['all', 'error', 'warn', 'log', 'info', 'debug'],
+              description: 'Filter by log type',
+              default: 'all'
+            },
+            limit: {
+              type: 'number',
+              description: 'Maximum number of logs to return (default: 100)',
+              default: 100
+            },
+            clear: {
+              type: 'boolean',
+              description: 'Clear logs after retrieval',
+              default: false
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+      {
+        name: 'browser_enable_console_capture',
+        description: 'Enable console log capture for an existing page. Logs are stored per instance.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+
+      // Network monitoring
+      {
+        name: 'browser_enable_network_monitoring',
+        description: `Enable network request/response monitoring for a page.
+
+Captures: URL, method, headers, status, timing, response size.
+Use browser_get_network_logs to retrieve captured data.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+      {
+        name: 'browser_get_network_logs',
+        description: `Get captured network requests/responses.
+
+Returns: request URL, method, headers, status, timing, response size.
+Filter by resource type (document, xhr, fetch, script, stylesheet, image, etc.)`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            },
+            filter: {
+              type: 'string',
+              description: 'Filter by resource type (e.g., "xhr", "fetch", "document", "script")'
+            },
+            urlPattern: {
+              type: 'string',
+              description: 'Filter by URL pattern (regex supported)'
+            },
+            limit: {
+              type: 'number',
+              description: 'Maximum number of entries to return (default: 100)',
+              default: 100
+            },
+            clear: {
+              type: 'boolean',
+              description: 'Clear logs after retrieval',
+              default: false
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+
+      // PDF generation
+      {
+        name: 'browser_generate_pdf',
+        description: `Generate a PDF from the current page. Only works with Chromium in headless mode.
+
+Options: page size, margins, scale, header/footer templates, page ranges.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            },
+            path: {
+              type: 'string',
+              description: 'File path to save PDF. If omitted, returns base64 encoded PDF.'
+            },
+            format: {
+              type: 'string',
+              enum: ['Letter', 'Legal', 'Tabloid', 'Ledger', 'A0', 'A1', 'A2', 'A3', 'A4', 'A5', 'A6'],
+              description: 'Paper format (default: Letter)',
+              default: 'Letter'
+            },
+            landscape: {
+              type: 'boolean',
+              description: 'Use landscape orientation',
+              default: false
+            },
+            scale: {
+              type: 'number',
+              description: 'Scale of the webpage rendering (0.1-2.0, default: 1)',
+              default: 1
+            },
+            margin: {
+              type: 'object',
+              properties: {
+                top: { type: 'string', description: 'Top margin (e.g., "1cm", "0.5in")' },
+                right: { type: 'string' },
+                bottom: { type: 'string' },
+                left: { type: 'string' }
+              },
+              description: 'Page margins'
+            },
+            printBackground: {
+              type: 'boolean',
+              description: 'Print background graphics',
+              default: true
+            },
+            pageRanges: {
+              type: 'string',
+              description: 'Page ranges to print (e.g., "1-5, 8, 11-13")'
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+
+      // File downloads
+      {
+        name: 'browser_wait_for_download',
+        description: `Wait for a download to start and complete.
+
+Use this after clicking a download link. Returns download path and filename.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            },
+            saveAs: {
+              type: 'string',
+              description: 'Custom path to save the downloaded file'
+            },
+            timeout: {
+              type: 'number',
+              description: 'Timeout in milliseconds (default: 30000)',
+              default: 30000
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+      {
+        name: 'browser_get_downloads',
+        description: 'Get list of downloads for an instance (completed and pending).',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+
       {
         name: 'browser_list_instances',
         description: 'List all browser instances',
@@ -1168,18 +1615,55 @@ Use when:
       let isImageResult = false;
 
       switch (name) {
-        case 'browser_create_instance':
+        case 'browser_create_instance': {
+          // Handle device emulation
+          let viewport = args.viewport || { width: 1280, height: 720 };
+          let userAgent = args.userAgent;
+
+          if (args.device) {
+            const deviceConfig = devices[args.device as keyof typeof devices];
+            if (deviceConfig) {
+              viewport = deviceConfig.viewport;
+              userAgent = deviceConfig.userAgent;
+            }
+          }
+
           result = await this.browserManager.createInstance(
             {
               browserType: args.browserType || 'chromium',
               headless: args.headless ?? true,
-              viewport: args.viewport || { width: 1280, height: 720 },
-              userAgent: args.userAgent,
+              viewport,
+              userAgent,
               storageStatePath: args.storageStatePath
             },
             args.metadata
           );
+
+          // Setup console capture if enabled
+          if (result.success && result.instanceId && args.enableConsoleCapture) {
+            const instance = this.browserManager.getInstance(result.instanceId);
+            if (instance) {
+              this.setupConsoleCapture(result.instanceId, instance.page);
+            }
+          }
+
+          // Setup network monitoring if enabled
+          if (result.success && result.instanceId && args.enableNetworkMonitoring) {
+            const instance = this.browserManager.getInstance(result.instanceId);
+            if (instance) {
+              this.setupNetworkMonitoring(result.instanceId, instance.page);
+            }
+          }
+
+          // Setup download handling
+          if (result.success && result.instanceId) {
+            const instance = this.browserManager.getInstance(result.instanceId);
+            if (instance) {
+              this.setupDownloadHandling(result.instanceId, instance.page);
+            }
+          }
           break;
+        }
 
         case 'browser_save_session':
           result = await this.browserManager.saveSessionState(args.instanceId, args.filePath);
@@ -1212,6 +1696,210 @@ Use when:
         case 'browser_release_profile':
           result = this.releaseProfile(args.profileId);
           break;
+
+        // Device emulation
+        case 'browser_list_devices': {
+          const filter = args.filter?.toLowerCase();
+          const deviceList = Object.entries(devices)
+            .filter(([name]) => !filter || name.toLowerCase().includes(filter))
+            .map(([name, device]) => ({
+              name,
+              viewport: device.viewport,
+              userAgent: device.userAgent,
+              isMobile: device.isMobile || false,
+              hasTouch: device.hasTouch || false
+            }));
+          result = {
+            success: true,
+            data: {
+              devices: deviceList,
+              count: deviceList.length
+            }
+          };
+          break;
+        }
+
+        // Console logs
+        case 'browser_enable_console_capture': {
+          const page = await this.getPage(args.instanceId);
+          if (!page) {
+            result = { success: false, error: `Instance ${args.instanceId} not found` };
+          } else {
+            this.setupConsoleCapture(args.instanceId, page);
+            result = { success: true, data: { enabled: true, instanceId: args.instanceId } };
+          }
+          break;
+        }
+
+        case 'browser_get_console_logs': {
+          let logs = this.consoleLogs.get(args.instanceId) || [];
+
+          // Filter by type
+          if (args.filter && args.filter !== 'all') {
+            logs = logs.filter(log => log.type === args.filter);
+          }
+
+          // Limit results
+          const limit = args.limit || 100;
+          logs = logs.slice(-limit);
+
+          // Clear if requested
+          if (args.clear) {
+            this.consoleLogs.delete(args.instanceId);
+          }
+
+          result = {
+            success: true,
+            data: {
+              logs,
+              count: logs.length,
+              totalCount: this.consoleLogs.get(args.instanceId)?.length || 0
+            }
+          };
+          break;
+        }
+
+        // Network monitoring
+        case 'browser_enable_network_monitoring': {
+          const page = await this.getPage(args.instanceId);
+          if (!page) {
+            result = { success: false, error: `Instance ${args.instanceId} not found` };
+          } else {
+            this.setupNetworkMonitoring(args.instanceId, page);
+            result = { success: true, data: { enabled: true, instanceId: args.instanceId } };
+          }
+          break;
+        }
+
+        case 'browser_get_network_logs': {
+          let logs = this.networkLogs.get(args.instanceId) || [];
+
+          // Filter by resource type
+          if (args.filter) {
+            logs = logs.filter(log => log.resourceType === args.filter);
+          }
+
+          // Filter by URL pattern
+          if (args.urlPattern) {
+            const regex = new RegExp(args.urlPattern, 'i');
+            logs = logs.filter(log => regex.test(log.url));
+          }
+
+          // Limit results
+          const limit = args.limit || 100;
+          logs = logs.slice(-limit);
+
+          // Clear if requested
+          if (args.clear) {
+            this.networkLogs.delete(args.instanceId);
+          }
+
+          result = {
+            success: true,
+            data: {
+              logs,
+              count: logs.length,
+              totalCount: this.networkLogs.get(args.instanceId)?.length || 0
+            }
+          };
+          break;
+        }
+
+        // PDF generation
+        case 'browser_generate_pdf': {
+          const page = await this.getPage(args.instanceId);
+          if (!page) {
+            result = { success: false, error: `Instance ${args.instanceId} not found` };
+          } else {
+            try {
+              const pdfOptions: any = {
+                format: args.format || 'Letter',
+                landscape: args.landscape || false,
+                scale: args.scale || 1,
+                printBackground: args.printBackground !== false,
+              };
+
+              if (args.margin) {
+                pdfOptions.margin = args.margin;
+              }
+
+              if (args.pageRanges) {
+                pdfOptions.pageRanges = args.pageRanges;
+              }
+
+              if (args.path) {
+                pdfOptions.path = args.path;
+                await page.pdf(pdfOptions);
+                result = {
+                  success: true,
+                  data: { path: args.path, saved: true }
+                };
+              } else {
+                const buffer = await page.pdf(pdfOptions);
+                result = {
+                  success: true,
+                  data: {
+                    pdf: buffer.toString('base64'),
+                    size: buffer.length
+                  }
+                };
+              }
+            } catch (error) {
+              result = {
+                success: false,
+                error: `PDF generation failed: ${error instanceof Error ? error.message : error}`
+              };
+            }
+          }
+          break;
+        }
+
+        // Download handling
+        case 'browser_wait_for_download': {
+          const page = await this.getPage(args.instanceId);
+          if (!page) {
+            result = { success: false, error: `Instance ${args.instanceId} not found` };
+          } else {
+            try {
+              const download = await page.waitForEvent('download', { timeout: args.timeout || 30000 });
+
+              let path: string | null;
+              if (args.saveAs) {
+                await download.saveAs(args.saveAs);
+                path = args.saveAs;
+              } else {
+                path = await download.path();
+              }
+
+              result = {
+                success: true,
+                data: {
+                  filename: download.suggestedFilename(),
+                  url: download.url(),
+                  path
+                }
+              };
+            } catch (error) {
+              result = {
+                success: false,
+                error: `Download failed: ${error instanceof Error ? error.message : error}`
+              };
+            }
+          }
+          break;
+        }
+
+        case 'browser_get_downloads': {
+          const downloads = this.downloads.get(args.instanceId) || [];
+          result = {
+            success: true,
+            data: {
+              downloads,
+              count: downloads.length
+            }
+          };
+          break;
+        }
 
         case 'browser_list_instances':
           result = this.browserManager.listInstances();

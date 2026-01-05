@@ -11,9 +11,15 @@ Multi-headed browser automation MCP server with stealth capabilities, concurrent
 | Zero-Config | Global profile persists sessions automatically |
 | Domain Intelligence | Auto-learns protection levels per domain |
 | Multi-instance | Up to 20 concurrent browser instances |
+| Profile Pool | 5 profiles for multi-process support |
 | Stealth | rebrowser-playwright + stealth plugin |
 | Humanize | Mouse, typing, scroll simulation |
 | Adaptive | Auto-activates on detection signals |
+| Device Emulation | Mobile/tablet simulation (iPhone, Pixel, iPad) |
+| Console Capture | Capture and filter console logs |
+| Network Monitoring | Track requests/responses with timing |
+| PDF Generation | Generate PDFs from pages |
+| Download Handling | Track and manage file downloads |
 | ARIA Snapshots | Token-efficient page representation |
 
 ## Architecture
@@ -148,15 +154,17 @@ browser_create_global({ url: "https://example.com", mode: "incognito" })  // Fre
 
 | Mistake | Problem | Solution |
 |---------|---------|----------|
-| Using `browser_create_instance` for authenticated sites | Sessions lost on close | Use `browser_create_global` (session mode) |
-| Using session mode when scraping same site with different accounts | Accounts conflict | Use `browser_create_global` (incognito mode) |
-| Getting "All profiles in use" error | Too many concurrent MCP processes | Use `browser_list_profiles` then `browser_release_profile` for stale locks |
+| Using `browser_create_instance` for Notion/Google/etc | **Sessions LOST** - need to login again | Use `browser_create_global` (DEFAULT) |
+| Using session mode for different accounts on same site | Accounts conflict | Use `browser_create_global` (incognito mode) |
+| Getting "All profiles in use" error | Too many concurrent MCP processes | Use `browser_list_profiles` then `browser_release_profile` |
+
+**IMPORTANT:** `browser_create_global` should be used for 90% of browsing tasks. It preserves logins.
 
 ### Standard Tools
 
 | Tool | Description |
 |------|-------------|
-| `browser_create_instance` | Create isolated browser instance |
+| `browser_create_instance` | Create isolated browser instance (supports device emulation) |
 | `browser_navigate` | Navigate with detection feedback |
 | `browser_click` | Click (humanize: true/false/auto) |
 | `browser_type` | Type text (humanize: true/false/auto) |
@@ -168,6 +176,62 @@ browser_create_global({ url: "https://example.com", mode: "incognito" })  // Fre
 | `browser_save_session` | Save session state |
 | `browser_close_instance` | Close instance |
 | `browser_close_all_instances` | Close all instances |
+
+### Device Emulation
+
+| Tool | Description |
+|------|-------------|
+| `browser_list_devices` | List available devices (iPhone, Pixel, iPad, etc.) |
+| `browser_create_instance` | Use `device` param: `{ device: "iPhone 14" }` |
+
+```javascript
+// Mobile emulation
+browser_create_instance({ device: "iPhone 14", headless: false })
+
+// Tablet emulation
+browser_create_instance({ device: "iPad Pro 11" })
+
+// List available devices
+browser_list_devices({ filter: "iphone" })
+```
+
+### Console & Network Monitoring
+
+| Tool | Description |
+|------|-------------|
+| `browser_enable_console_capture` | Start capturing console logs |
+| `browser_get_console_logs` | Get captured logs (filter by type) |
+| `browser_enable_network_monitoring` | Start capturing network requests |
+| `browser_get_network_logs` | Get captured requests (filter by type/URL) |
+
+```javascript
+// Enable at instance creation
+browser_create_instance({ enableConsoleCapture: true, enableNetworkMonitoring: true })
+
+// Or enable later
+browser_enable_console_capture({ instanceId: "..." })
+browser_enable_network_monitoring({ instanceId: "..." })
+
+// Get logs
+browser_get_console_logs({ instanceId: "...", filter: "error" })
+browser_get_network_logs({ instanceId: "...", filter: "xhr" })
+```
+
+### PDF Generation & Downloads
+
+| Tool | Description |
+|------|-------------|
+| `browser_generate_pdf` | Generate PDF from page |
+| `browser_wait_for_download` | Wait for download to complete |
+| `browser_get_downloads` | List downloads for instance |
+
+```javascript
+// Generate PDF
+browser_generate_pdf({ instanceId: "...", path: "output.pdf", format: "A4" })
+
+// Wait for download after clicking a link
+browser_wait_for_download({ instanceId: "...", saveAs: "/path/to/file.zip" })
+```
 
 ### Tool Naming Convention
 
