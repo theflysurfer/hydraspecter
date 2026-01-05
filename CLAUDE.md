@@ -21,6 +21,8 @@ Multi-headed browser automation MCP server with stealth capabilities, concurrent
 | PDF Generation | Generate PDFs from pages |
 | Download Handling | Track and manage file downloads |
 | ARIA Snapshots | Token-efficient page representation |
+| **Expectation Filtering** | Filter snapshots by intent (30-50% token reduction) |
+| **Auto TOON Format** | Large lists auto-formatted for 40-60% fewer tokens |
 
 ## Architecture
 
@@ -305,6 +307,58 @@ browser_click({
 **Alternative:** Use `browser_snapshot` to get ARIA refs and click by ref:
 ```javascript
 browser_click({ instanceId: "...", selector: "aria-ref=e14" })
+```
+
+## Token Optimization
+
+HydraSpecter automatically optimizes LLM token usage:
+
+### Expectation Filtering (browser_snapshot)
+
+Filter ARIA snapshots to only return relevant elements:
+
+```javascript
+// Full page: ~5000 tokens
+browser_snapshot({ instanceId: "..." })
+
+// Filtered: ~2000 tokens (60% reduction)
+browser_snapshot({
+  instanceId: "...",
+  expectation: "login form"  // Returns only form fields, buttons, inputs
+})
+```
+
+**Built-in expectations:** `login`, `form`, `search`, `navigation`, `nav`, `menu`, `products`, `articles`, `list`, `table`, `buttons`, `links`, `inputs`, `dialog`, `modal`, `popup`
+
+### Auto TOON Format (console/network logs)
+
+Large tabular results (>500 tokens) are automatically formatted as TOON:
+
+```yaml
+# Instead of JSON:
+# {"logs":[{"type":"error","text":"..."},{...}]}
+
+# Auto TOON format:
+logs:
+  type, text, timestamp
+  error, Error message, 1704500000
+  warn, Warning message, 1704500001
+```
+
+**40-60% fewer tokens** with improved LLM accuracy.
+
+### Response includes token stats:
+
+```json
+{
+  "format": "toon",
+  "content": "...",
+  "tokenStats": {
+    "jsonTokens": 850,
+    "toonTokens": 340,
+    "savings": "60%"
+  }
+}
 ```
 
 ## Humanize Modes
