@@ -112,3 +112,6 @@ screenshot-*.png
 screenshot-*.jpg
 screenshot-*.jpeg
 markdown-*.md
+
+# Benchmark results (generated)
+benchmark/results/
