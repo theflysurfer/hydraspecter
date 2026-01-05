@@ -262,9 +262,30 @@ export class GlobalProfile {
 
   /**
    * Force release a profile (for manual cleanup)
+   * Also closes the browser context to unlock files (cookies, etc.)
    */
-  forceReleaseProfile(profileId: string): boolean {
-    return this.profilePool.forceReleaseProfile(profileId);
+  async forceReleaseProfile(profileId: string): Promise<{ released: boolean; contextClosed: boolean }> {
+    let contextClosed = false;
+
+    // If this is our active profile, close the context first
+    if (this.context && this.profileId === profileId) {
+      try {
+        await this.context.close();
+        this.context = null;
+        this.pages.clear();
+        contextClosed = true;
+        console.log(`[GlobalProfile] Closed context for profile: ${profileId}`);
+      } catch (error) {
+        console.error(`[GlobalProfile] Error closing context: ${error}`);
+      }
+      this.profileId = null;
+      this.profileDir = null;
+    }
+
+    // Release the profile in the pool
+    const released = this.profilePool.forceReleaseProfile(profileId);
+
+    return { released, contextClosed };
   }
 }
 

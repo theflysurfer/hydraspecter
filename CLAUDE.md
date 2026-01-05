@@ -120,7 +120,7 @@ Navigate → Detection? → Yes → Level++ → Apply new settings
 | `browser_reset_protection` | Reset domain protection to level 0 |
 | `browser_list_domains` | List all domains with learned protection levels |
 | `browser_list_profiles` | List profile pool status (available/locked) |
-| `browser_release_profile` | Force release a stale profile lock |
+| `browser_release_profile` | Force release profile AND close its browser (unlocks files) |
 
 ### Browser Modes (`browser_create_global`)
 
@@ -173,7 +173,7 @@ browser_create_global({ url: "https://example.com", mode: "incognito" })  // Fre
 | `browser_screenshot` | Take screenshot |
 | `browser_snapshot` | Get ARIA tree (token-efficient) |
 | `browser_batch_execute` | Multiple operations in one call |
-| `browser_save_session` | Save session state |
+| `browser_save_session` | Save session state (works with both instanceId AND pageId) |
 | `browser_close_instance` | Close instance |
 | `browser_close_all_instances` | Close all instances |
 
@@ -269,6 +269,43 @@ browser_click({
 ```
 
 Alternative: Navigate directly to OAuth URL (more reliable for Google Sign-In).
+
+### Troubleshooting Click Timeouts
+
+**Problem:** `locator.click: Timeout 30000ms exceeded` on React/Vue sites like Notion, Shopify.
+
+**Cause:** `:has-text()` and complex selectors often fail on modern SPAs due to:
+- Shadow DOM
+- Dynamic content loading
+- Text that includes hidden characters
+
+**Solution:** Use `browser_evaluate` to find element coordinates, then click by position:
+
+```javascript
+// Step 1: Find element coordinates
+browser_evaluate({
+  instanceId: "...",
+  script: `(() => {
+    const el = [...document.querySelectorAll('button')]
+      .find(b => b.textContent.includes('Continuer'));
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    return { x: rect.x + rect.width/2, y: rect.y + rect.height/2 };
+  })()`
+})
+
+// Step 2: Click at coordinates
+browser_click({
+  instanceId: "...",
+  position: { x: result.x, y: result.y },
+  humanize: true
+})
+```
+
+**Alternative:** Use `browser_snapshot` to get ARIA refs and click by ref:
+```javascript
+browser_click({ instanceId: "...", selector: "aria-ref=e14" })
+```
 
 ## Humanize Modes
 

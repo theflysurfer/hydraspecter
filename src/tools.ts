@@ -1,5 +1,7 @@
 import { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { Page, devices, ConsoleMessage, Request, Response } from 'playwright';
+import { promises as fs } from 'fs';
+import path from 'path';
 import { BrowserManager } from './browser-manager.js';
 import {
   ToolResult,
@@ -655,13 +657,16 @@ Use this to troubleshoot "all profiles in use" errors.`,
       },
       {
         name: 'browser_release_profile',
-        description: `Force release a locked profile.
+        description: `Force release a locked profile AND close its browser context.
 
 Use when:
 • A previous session crashed without cleanup
 • The lock is stale (PID no longer running)
+• You need to access locked files (cookies, localStorage)
 
-⚠️ Only use if you're sure the profile is not in active use.`,
+Returns: { released: true, contextClosed: true } when browser was closed.
+
+⚠️ This closes all pages in the profile. Only use if you're sure the profile is not in active use.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -1070,7 +1075,13 @@ Use this after clicking a download link. Returns download path and filename.`,
       // Page interaction tools
       {
         name: 'browser_click',
-        description: 'Click on a page element. Use CSS selectors (e.g., "#btn", ".class") or ARIA refs from browser_snapshot (e.g., "aria-ref=e14"). For cross-origin iframes (like Google Sign-In), use position {x, y} to click at absolute coordinates.',
+        description: `Click on a page element. Use CSS selectors (e.g., "#btn", ".class") or ARIA refs from browser_snapshot (e.g., "aria-ref=e14"). For cross-origin iframes (like Google Sign-In), use position {x, y} to click at absolute coordinates.
+
+⚠️ SELECTOR TIMEOUT? For complex sites (Notion, Google, Shopify):
+1. Use browser_evaluate to find element: \`(() => { const el = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Text')); return el ? el.getBoundingClientRect() : null; })()\`
+2. Then use position: {x: rect.x + rect.width/2, y: rect.y + rect.height/2}
+
+:has-text() selectors often fail on React/Vue sites. Use browser_evaluate + position instead.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -1665,9 +1676,38 @@ Use this after clicking a download link. Returns download path and filename.`,
           break;
         }
 
-        case 'browser_save_session':
-          result = await this.browserManager.saveSessionState(args.instanceId, args.filePath);
+        case 'browser_save_session': {
+          // Check if it's a GlobalProfile page first
+          const globalPage = this.globalPages.get(args.instanceId);
+          if (globalPage) {
+            // Save from GlobalProfile page context
+            try {
+              const context = globalPage.context();
+              const dir = path.dirname(args.filePath);
+              await fs.mkdir(dir, { recursive: true });
+              const storageState = await context.storageState();
+              await fs.writeFile(args.filePath, JSON.stringify(storageState, null, 2));
+              result = {
+                success: true,
+                data: {
+                  path: args.filePath,
+                  source: 'global_profile',
+                  cookies: storageState.cookies?.length || 0,
+                  origins: storageState.origins?.length || 0
+                }
+              };
+            } catch (error) {
+              result = {
+                success: false,
+                error: `Failed to save session: ${error instanceof Error ? error.message : error}`
+              };
+            }
+          } else {
+            // Fall back to browserManager
+            result = await this.browserManager.saveSessionState(args.instanceId, args.filePath);
+          }
           break;
+        }
 
         case 'browser_create_global':
           result = await this.createGlobalPage(args.url, args.mode || 'session');
@@ -1694,7 +1734,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           break;
 
         case 'browser_release_profile':
-          result = this.releaseProfile(args.profileId);
+          result = await this.releaseProfile(args.profileId);
           break;
 
         // Device emulation
@@ -2096,6 +2136,12 @@ Use this after clicking a download link. Returns download path and filename.`,
         this.globalPages.set(pageId, page);
         this.incognitoBrowsers.set(pageId, browser);
 
+        // Clean up globalPages when page is closed
+        page.on('close', () => {
+          this.globalPages.delete(pageId);
+          console.log(`[Incognito] Page ${pageId} closed, cleaned up from globalPages`);
+        });
+
         console.log(`[Incognito] Created fresh context (no cookies, no history)`);
       } else {
         // Use persistent global profile (default)
@@ -2103,6 +2149,12 @@ Use this after clicking a download link. Returns download path and filename.`,
         pageId = result.pageId;
         page = result.page;
         this.globalPages.set(pageId, page);
+
+        // Clean up globalPages when page is closed
+        page.on('close', () => {
+          this.globalPages.delete(pageId);
+          console.log(`[GlobalProfile] Page ${pageId} closed, cleaned up from globalPages`);
+        });
       }
 
       let protectionLevel = 0;
@@ -2272,18 +2324,19 @@ Use this after clicking a download link. Returns download path and filename.`,
   }
 
   /**
-   * Force release a profile
+   * Force release a profile and close its browser context
    */
-  private releaseProfile(profileId: string): ToolResult {
-    const released = this.globalProfile.forceReleaseProfile(profileId);
+  private async releaseProfile(profileId: string): Promise<ToolResult> {
+    const result = await this.globalProfile.forceReleaseProfile(profileId);
 
     return {
-      success: released,
+      success: result.released,
       data: {
-        released,
+        released: result.released,
+        contextClosed: result.contextClosed,
         profileId,
       },
-      error: released ? undefined : `Profile ${profileId} not found or could not be released`,
+      error: result.released ? undefined : `Profile ${profileId} not found or could not be released`,
     };
   }
 
