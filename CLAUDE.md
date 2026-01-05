@@ -83,9 +83,26 @@ Navigate → Detection? → Yes → Level++ → Apply new settings
 
 | Tool | Description |
 |------|-------------|
-| `browser_create_global` | Create page with global profile + auto protection |
+| `browser_create_global` | Create page with global profile or incognito mode |
 | `browser_get_protection_level` | Check domain's current protection level |
+| `browser_set_protection_level` | Manually set protection level for a domain |
 | `browser_reset_protection` | Reset domain protection to level 0 |
+| `browser_list_domains` | List all domains with learned protection levels |
+
+### Browser Modes (`browser_create_global`)
+
+| Mode | Use Case | Behavior |
+|------|----------|----------|
+| `session` (default) | Authenticated sites | Persistent cookies, localStorage, Google OAuth |
+| `incognito` | Scraping, anonymous | Fresh context, no stored data |
+
+```javascript
+// Authenticated browsing (default)
+browser_create_global({ url: "https://auchan.fr" })  // Uses saved login
+
+// Anonymous scraping
+browser_create_global({ url: "https://example.com", mode: "incognito" })  // Fresh context
+```
 
 ### Standard Tools
 
@@ -115,6 +132,31 @@ All tools accept either:
 - `pageId` from `browser_create_global`
 
 This means you can mix and match - create a page with `browser_create_global` and use `browser_click`, `browser_type`, etc. with the returned `pageId`.
+
+### Clicking Cross-Origin Iframes (Google Sign-In)
+
+For cross-origin iframes like Google Sign-In buttons, use `position` parameter:
+
+```javascript
+// 1. Get iframe coordinates
+const iframeInfo = await browser_evaluate({
+  instanceId: "...",
+  script: `(() => {
+    const iframe = document.querySelector('iframe[id^="gsi_"]');
+    const rect = iframe.getBoundingClientRect();
+    return { centerX: rect.x + rect.width/2, centerY: rect.y + rect.height/2 };
+  })()`
+});
+
+// 2. Click at coordinates
+browser_click({
+  instanceId: "...",
+  position: { x: iframeInfo.centerX, y: iframeInfo.centerY },
+  humanize: true
+})
+```
+
+Alternative: Navigate directly to OAuth URL (more reliable for Google Sign-In).
 
 ## Humanize Modes
 

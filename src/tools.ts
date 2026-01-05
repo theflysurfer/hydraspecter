@@ -31,6 +31,8 @@ export class BrowserTools {
   private readonly DETECTION_CACHE_TTL = 30000; // 30 seconds
   // Map pageId to Page for global profile pages
   private globalPages: Map<string, Page> = new Map();
+  // Map pageId to Browser for incognito contexts (for cleanup)
+  private incognitoBrowsers: Map<string, import('playwright').Browser> = new Map();
 
   constructor(
     private browserManager: BrowserManager,
@@ -169,7 +171,16 @@ export class BrowserTools {
       // Instance management tools
       {
         name: 'browser_create_instance',
-        description: 'Create a new browser instance. Returns an instanceId to use with other browser_* tools. For anti-detection: use headless: false + no custom viewport. Session can be restored from a previous browser_save_session file.',
+        description: `Create an ISOLATED browser instance (no persistent sessions).
+
+⚠️ IMPORTANT: For sites requiring login (e-commerce, social media, etc.), use browser_create_global instead - it automatically persists sessions.
+
+Use browser_create_instance only when you need:
+• Complete isolation from other sessions
+• Custom browser settings (Firefox, WebKit)
+• Manual session management via browser_save_session
+
+Returns an instanceId to use with other browser_* tools.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -251,18 +262,32 @@ export class BrowserTools {
       // Zero-config global profile tools
       {
         name: 'browser_create_global',
-        description: `Create a page in the global persistent browser profile. ZERO-CONFIG SESSION MANAGEMENT:
-• Sessions (cookies, localStorage, IndexedDB) persist AUTOMATICALLY - no save/load needed
+        description: `Create a page in the global browser profile with TWO MODES:
+
+🔑 **SESSION MODE (default)** - RECOMMENDED for most use cases:
+• Sessions (cookies, localStorage, IndexedDB) persist AUTOMATICALLY
 • Google OAuth login persists across ALL sites and repos
-• Anti-detection level auto-applied based on domain history
-• If blocked/detected, protection level increases automatically on retry
-Use this instead of browser_create_instance for sites requiring login or anti-detection.`,
+• Once logged in, stays logged in forever (like a real browser)
+• Perfect for: e-commerce, social media, authenticated APIs, Notion, Gmail, etc.
+
+🕵️ **INCOGNITO MODE** - Use for scraping/anonymous browsing:
+• Fresh browser context with NO stored data
+• Each page starts clean - no cookies, no history
+• Perfect for: scraping, price comparison, anonymous testing
+
+Anti-detection level auto-applied based on domain history in both modes.`,
         inputSchema: {
           type: 'object',
           properties: {
             url: {
               type: 'string',
               description: 'Optional URL to navigate to after creating the page'
+            },
+            mode: {
+              type: 'string',
+              enum: ['session', 'incognito'],
+              description: 'Browser mode: "session" (default) uses persistent profile with saved logins, "incognito" starts fresh with no cookies/history',
+              default: 'session'
             }
           }
         },
@@ -271,6 +296,7 @@ Use this instead of browser_create_instance for sites requiring login or anti-de
           properties: {
             pageId: { type: 'string', description: 'Unique identifier - use this as instanceId in other tools' },
             url: { type: 'string' },
+            mode: { type: 'string', description: 'Browser mode: "session" or "incognito"' },
             protectionLevel: { type: 'number', description: 'Current protection level (0-3) for this domain' },
             settings: {
               type: 'object',
@@ -279,9 +305,9 @@ Use this instead of browser_create_instance for sites requiring login or anti-de
                 headless: { type: 'boolean' }
               }
             },
-            profileDir: { type: 'string', description: 'Path to persistent Chrome profile' }
+            profileDir: { type: 'string', description: 'Path to persistent Chrome profile (only in session mode)' }
           },
-          required: ['pageId']
+          required: ['pageId', 'mode']
         }
       },
       {
@@ -530,7 +556,7 @@ Levels increase automatically when anti-bot detection is encountered.`,
       // Page interaction tools
       {
         name: 'browser_click',
-        description: 'Click on a page element. Use CSS selectors (e.g., "#btn", ".class") or ARIA refs from browser_snapshot (e.g., "aria-ref=e14").',
+        description: 'Click on a page element. Use CSS selectors (e.g., "#btn", ".class") or ARIA refs from browser_snapshot (e.g., "aria-ref=e14"). For cross-origin iframes (like Google Sign-In), use position {x, y} to click at absolute coordinates.',
         inputSchema: {
           type: 'object',
           properties: {
@@ -540,7 +566,20 @@ Levels increase automatically when anti-bot detection is encountered.`,
             },
             selector: {
               type: 'string',
-              description: 'CSS selector ("#id", ".class", "button") or ARIA ref from snapshot ("aria-ref=e14")',
+              description: 'CSS selector ("#id", ".class", "button") or ARIA ref from snapshot ("aria-ref=e14"). Optional if position is provided.',
+            },
+            position: {
+              type: 'object',
+              description: 'Click at absolute coordinates (useful for cross-origin iframes like Google Sign-In). Use browser_evaluate to get element position first.',
+              properties: {
+                x: { type: 'number', description: 'X coordinate in pixels' },
+                y: { type: 'number', description: 'Y coordinate in pixels' }
+              },
+              required: ['x', 'y']
+            },
+            frame: {
+              type: 'string',
+              description: 'Optional: CSS selector for iframe to click inside (e.g., "iframe[src*=\\"google\\"]" for Google login buttons)',
             },
             button: {
               type: 'string',
@@ -570,7 +609,7 @@ Levels increase automatically when anti-bot detection is encountered.`,
               default: false
             }
           },
-          required: ['instanceId', 'selector']
+          required: ['instanceId']
         },
         outputSchema: {
           type: 'object',
@@ -1080,7 +1119,7 @@ Levels increase automatically when anti-bot detection is encountered.`,
           break;
 
         case 'browser_create_global':
-          result = await this.createGlobalPage(args.url);
+          result = await this.createGlobalPage(args.url, args.mode || 'session');
           break;
 
         case 'browser_get_protection_level':
@@ -1104,7 +1143,23 @@ Levels increase automatically when anti-bot detection is encountered.`,
           break;
 
         case 'browser_close_instance':
-          result = await this.browserManager.closeInstance(args.instanceId);
+          // Check if it's a global page or incognito first
+          if (this.globalPages.has(args.instanceId)) {
+            const page = this.globalPages.get(args.instanceId)!;
+            await page.close();
+            this.globalPages.delete(args.instanceId);
+
+            // If it's an incognito browser, close the whole browser
+            if (this.incognitoBrowsers.has(args.instanceId)) {
+              const browser = this.incognitoBrowsers.get(args.instanceId)!;
+              await browser.close();
+              this.incognitoBrowsers.delete(args.instanceId);
+            }
+
+            result = { success: true, data: { closed: true, instanceId: args.instanceId } };
+          } else {
+            result = await this.browserManager.closeInstance(args.instanceId);
+          }
           break;
 
         case 'browser_close_all_instances':
@@ -1136,7 +1191,9 @@ Levels increase automatically when anti-bot detection is encountered.`,
             clickCount: args.clickCount || 1,
             delay: args.delay || 0,
             timeout: args.timeout || 30000,
-            humanize: args.humanize || false
+            humanize: args.humanize || false,
+            frame: args.frame,
+            position: args.position
           });
           break;
 
@@ -1243,13 +1300,47 @@ Levels increase automatically when anti-bot detection is encountered.`,
   // ============= Global Profile Methods =============
 
   /**
-   * Create a page in the global persistent profile
+   * Create a page in the global persistent profile or incognito mode
    * Zero-config: auto-applies protection settings based on domain
+   * @param url - Optional URL to navigate to
+   * @param mode - 'session' (persistent profile) or 'incognito' (fresh context)
    */
-  private async createGlobalPage(url?: string): Promise<ToolResult> {
+  private async createGlobalPage(url?: string, mode: 'session' | 'incognito' = 'session'): Promise<ToolResult> {
     try {
-      const { pageId, page } = await this.globalProfile.createPage();
-      this.globalPages.set(pageId, page);
+      let pageId: string;
+      let page: import('playwright').Page;
+
+      if (mode === 'incognito') {
+        // Create a fresh incognito context with no persistent data
+        pageId = `incognito-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const { chromium } = await import('playwright');
+
+        // Get protection settings for anti-detection
+        const settings = url ? this.domainIntelligence.getSettings(url) : this.domainIntelligence.getSettings('default');
+
+        const browser = await chromium.launch({
+          headless: settings.headless,
+          channel: 'chrome',
+        });
+
+        const context = await browser.newContext({
+          viewport: null, // Natural viewport for anti-detection
+        });
+
+        page = await context.newPage();
+
+        // Store with cleanup handler
+        this.globalPages.set(pageId, page);
+        this.incognitoBrowsers.set(pageId, browser);
+
+        console.log(`[Incognito] Created fresh context (no cookies, no history)`);
+      } else {
+        // Use persistent global profile (default)
+        const result = await this.globalProfile.createPage();
+        pageId = result.pageId;
+        page = result.page;
+        this.globalPages.set(pageId, page);
+      }
 
       let protectionLevel = 0;
       let settings = this.domainIntelligence.getSettings('default');
@@ -1260,7 +1351,7 @@ Levels increase automatically when anti-bot detection is encountered.`,
         protectionLevel = this.domainIntelligence.getLevel(url);
         settings = this.domainIntelligence.getSettings(url);
 
-        console.log(`[GlobalProfile] Creating page for ${domain} (protection level: ${protectionLevel})`);
+        console.log(`[${mode === 'incognito' ? 'Incognito' : 'GlobalProfile'}] Creating page for ${domain} (protection level: ${protectionLevel})`);
 
         await page.goto(url, { waitUntil: 'load' });
       }
@@ -1271,13 +1362,14 @@ Levels increase automatically when anti-bot detection is encountered.`,
           pageId,
           url: page.url(),
           title: await page.title(),
+          mode,
           protectionLevel,
           settings: {
             humanize: settings.humanizeMouse,
             headless: settings.headless,
             delays: settings.delays,
           },
-          profileDir: this.globalProfile.getProfileDir(),
+          profileDir: mode === 'session' ? this.globalProfile.getProfileDir() : null,
         },
       };
     } catch (error) {
@@ -1531,38 +1623,75 @@ Levels increase automatically when anti-bot detection is encountered.`,
     }
   }
 
-  private async click(instanceId: string, selector: string, options: ClickOptions): Promise<ToolResult> {
+  private async click(instanceId: string, selector: string | undefined, options: ClickOptions): Promise<ToolResult> {
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
-      // Check if humanize should be enabled (supports "auto" mode with detection)
-      const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'mouse', options.humanize);
+      // Click at absolute coordinates (useful for cross-origin iframes like Google Sign-In)
+      if (options.position) {
+        const { x, y } = options.position;
+        // Use human-like movement if enabled
+        const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'mouse', options.humanize);
 
-      if (useHumanize) {
-        // Use human-like mouse movement with Bezier curves
-        await humanClick(pageResult.page, selector);
-        const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.mouse === 'auto';
+        if (useHumanize) {
+          // Import and use bezier curve movement to coordinates
+          const { humanMove } = await import('./utils/ghost-cursor.js');
+          await humanMove(pageResult.page, { x, y });
+        }
+
+        await pageResult.page.mouse.click(x, y, {
+          button: options.button || 'left',
+          clickCount: options.clickCount || 1,
+          delay: options.delay || 0
+        });
+
         return {
           success: true,
-          data: { selector, clicked: true, humanized: true, autoDetected: detectionTriggered },
+          data: { position: { x, y }, clicked: true, humanized: useHumanize },
           instanceId
         };
       }
 
-      // Standard click
+      // Selector-based click requires a selector
+      if (!selector) {
+        return { success: false, error: 'Either selector or position must be provided' };
+      }
+
+      // Check if humanize should be enabled (supports "auto" mode with detection)
+      const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'mouse', options.humanize);
+
+      // Get the target - either page or frame
+      let target: any = pageResult.page;
+      if (options.frame) {
+        target = pageResult.page.frameLocator(options.frame);
+      }
+
+      if (useHumanize && !options.frame) {
+        // Use human-like mouse movement with Bezier curves (only on main page, not frames)
+        await humanClick(pageResult.page, selector);
+        const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.mouse === 'auto';
+        return {
+          success: true,
+          data: { selector, clicked: true, humanized: true, autoDetected: detectionTriggered, frame: options.frame },
+          instanceId
+        };
+      }
+
+      // Standard click (works on both page and frameLocator)
       const clickOptions: any = {
         button: options.button
       };
       if (options.clickCount) clickOptions.clickCount = options.clickCount;
       if (options.delay) clickOptions.delay = options.delay;
       if (options.timeout) clickOptions.timeout = options.timeout;
-      await pageResult.page.click(selector, clickOptions);
+
+      await target.locator(selector).click(clickOptions);
       return {
         success: true,
-        data: { selector, clicked: true },
+        data: { selector, clicked: true, frame: options.frame },
         instanceId
       };
     } catch (error) {

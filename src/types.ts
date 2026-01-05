@@ -101,6 +101,8 @@ export interface ClickOptions {
   delay?: number;
   timeout?: number;
   humanize?: HumanizeMode;  // Use human-like mouse movement (true/false/"auto")
+  frame?: string;  // Optional iframe selector to click inside (e.g., "iframe[src*='google']")
+  position?: { x: number; y: number };  // Click at absolute coordinates (for cross-origin iframes)
 }
 
 export interface TypeOptions {
