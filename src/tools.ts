@@ -17,7 +17,7 @@ import { humanType, humanTypeInElement } from './utils/human-typing.js';
 import { humanScrollDown, humanScrollUp, humanScrollToElement, humanScrollToTop, humanScrollToBottom } from './utils/human-scroll.js';
 import { DetectionMonitor, DetectionResult } from './utils/detection-monitor.js';
 import { RateLimiter } from './utils/rate-limiter.js';
-import { getGlobalProfile, GlobalProfile } from './global-profile.js';
+import { getGlobalProfile, GlobalProfile, AllProfilesInUseError } from './global-profile.js';
 import { getDomainIntelligence, DomainIntelligence } from './domain-intelligence.js';
 
 export class BrowserTools {
@@ -38,7 +38,7 @@ export class BrowserTools {
     private browserManager: BrowserManager,
     humanizeConfig?: HumanizeConfig,
     rateLimitConfig?: RateLimitConfig,
-    options?: { profileDir?: string; headless?: boolean; channel?: 'chrome' | 'msedge' }
+    options?: { poolSize?: number; headless?: boolean; channel?: 'chrome' | 'msedge' }
   ) {
     this.humanizeConfig = humanizeConfig || {};
     this.detectionMonitor = new DetectionMonitor({
@@ -46,9 +46,9 @@ export class BrowserTools {
     });
     this.rateLimiter = new RateLimiter(rateLimitConfig);
     this.globalProfile = getGlobalProfile({
-      profileDir: options?.profileDir,
       headless: options?.headless ?? false, // Default visible for anti-detection
       channel: options?.channel,
+      poolSize: options?.poolSize,
     });
     this.domainIntelligence = getDomainIntelligence();
   }
@@ -262,20 +262,20 @@ Returns an instanceId to use with other browser_* tools.`,
       // Zero-config global profile tools
       {
         name: 'browser_create_global',
-        description: `Create a page in the global browser profile with TWO MODES:
+        description: `🔑 RECOMMENDED - Create a page with persistent sessions.
 
-🔑 **SESSION MODE (default)** - RECOMMENDED for most use cases:
-• Sessions (cookies, localStorage, IndexedDB) persist AUTOMATICALLY
-• Google OAuth login persists across ALL sites and repos
-• Once logged in, stays logged in forever (like a real browser)
-• Perfect for: e-commerce, social media, authenticated APIs, Notion, Gmail, etc.
+**Use this tool for:**
+• Sites requiring login (e-commerce, social media, email)
+• Any site where you want to stay logged in
+• Google OAuth flows (login once, works everywhere)
 
-🕵️ **INCOGNITO MODE** - Use for scraping/anonymous browsing:
-• Fresh browser context with NO stored data
-• Each page starts clean - no cookies, no history
-• Perfect for: scraping, price comparison, anonymous testing
+**Modes:**
+• session (default): Persistent cookies/localStorage, auto-selects available profile from pool
+• incognito: Fresh context, no stored data
 
-Anti-detection level auto-applied based on domain history in both modes.`,
+**Multi-process:** Uses profile pool (5 profiles). If all in use, returns explicit error with suggestion.
+
+Returns pageId to use with other browser_* tools.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -403,6 +403,73 @@ Levels increase automatically when anti-bot detection is encountered.`,
                 }
               }
             }
+          }
+        }
+      },
+      {
+        name: 'browser_list_profiles',
+        description: `List all profiles in the pool and their lock status.
+
+Returns:
+• Available profiles (ready to use)
+• Locked profiles (PID, started time, can be force-released if stale)
+
+Use this to troubleshoot "all profiles in use" errors.`,
+        inputSchema: {
+          type: 'object',
+          properties: {}
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            profiles: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  path: { type: 'string' },
+                  available: { type: 'boolean' },
+                  lock: {
+                    type: 'object',
+                    properties: {
+                      pid: { type: 'number' },
+                      startedAt: { type: 'string' },
+                      mcpId: { type: 'string' }
+                    }
+                  },
+                  isStale: { type: 'boolean' }
+                }
+              }
+            },
+            currentProfile: { type: 'string', description: 'Profile ID used by this process (null if none)' }
+          }
+        }
+      },
+      {
+        name: 'browser_release_profile',
+        description: `Force release a locked profile.
+
+Use when:
+• A previous session crashed without cleanup
+• The lock is stale (PID no longer running)
+
+⚠️ Only use if you're sure the profile is not in active use.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            profileId: {
+              type: 'string',
+              description: 'Profile ID to release (e.g., "pool-0")'
+            }
+          },
+          required: ['profileId']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            released: { type: 'boolean' },
+            profileId: { type: 'string' }
           }
         }
       },
@@ -1138,6 +1205,14 @@ Levels increase automatically when anti-bot detection is encountered.`,
           result = this.listDomains();
           break;
 
+        case 'browser_list_profiles':
+          result = this.listProfiles();
+          break;
+
+        case 'browser_release_profile':
+          result = this.releaseProfile(args.profileId);
+          break;
+
         case 'browser_list_instances':
           result = this.browserManager.listInstances();
           break;
@@ -1373,6 +1448,23 @@ Levels increase automatically when anti-bot detection is encountered.`,
         },
       };
     } catch (error) {
+      // Handle all profiles in use error specially
+      if (error instanceof AllProfilesInUseError) {
+        return {
+          success: false,
+          error: 'All profiles are in use',
+          data: {
+            lockedProfiles: error.lockedProfiles.map(p => ({
+              id: p.id,
+              pid: p.lock?.pid,
+              since: p.lock?.startedAt,
+              isStale: p.isStale,
+            })),
+            suggestion: 'Close other HydraSpecter sessions, use browser_release_profile to release stale locks, or use mode: "incognito"',
+          },
+        };
+      }
+
       return {
         success: false,
         error: `Failed to create global page: ${error instanceof Error ? error.message : error}`,
@@ -1469,6 +1561,41 @@ Levels increase automatically when anti-bot detection is encountered.`,
         })),
         count: profiles.length,
       },
+    };
+  }
+
+  /**
+   * List all profiles in the pool
+   */
+  private listProfiles(): ToolResult {
+    const profiles = this.globalProfile.listProfiles();
+    const currentProfile = this.globalProfile.getProfileId();
+
+    return {
+      success: true,
+      data: {
+        profiles,
+        currentProfile,
+        available: profiles.filter(p => p.available).length,
+        inUse: profiles.filter(p => !p.available).length,
+        stale: profiles.filter(p => p.isStale).length,
+      },
+    };
+  }
+
+  /**
+   * Force release a profile
+   */
+  private releaseProfile(profileId: string): ToolResult {
+    const released = this.globalProfile.forceReleaseProfile(profileId);
+
+    return {
+      success: released,
+      data: {
+        released,
+        profileId,
+      },
+      error: released ? undefined : `Profile ${profileId} not found or could not be released`,
     };
   }
 

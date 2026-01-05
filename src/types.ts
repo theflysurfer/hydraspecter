@@ -44,8 +44,8 @@ export interface BrowserConfig {
 
 /** Global profile configuration for zero-config session persistence */
 export interface GlobalProfileConfig {
-  /** Custom profile directory (default: ~/.hydraspecter/profile/) */
-  profileDir?: string;
+  /** Number of profiles in pool for multi-process support (default: 5) */
+  poolSize?: number;
   /** Run browser in headless mode (default: false for anti-detection) */
   headless?: boolean;
   /** Browser channel to use (chrome, msedge) */

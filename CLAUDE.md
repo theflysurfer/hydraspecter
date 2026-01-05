@@ -41,19 +41,44 @@ src/
 
 ```
 ~/.hydraspecter/
-├── profile/                    # Chrome persistent profile (userDataDir)
-│   ├── Default/                # Cookies, localStorage, IndexedDB, cache
-│   └── ...                     # Full Chrome profile data
-└── domain-intelligence.json    # Protection levels per domain
+├── profiles/                   # Profile pool for multi-process support
+│   ├── pool-0/                 # Profile 0 (cookies, localStorage, etc.)
+│   ├── pool-1/                 # Profile 1
+│   ├── pool-2/                 # Profile 2
+│   ├── pool-3/                 # Profile 3
+│   └── pool-4/                 # Profile 4
+├── locks/                      # Lock files for profile management
+│   └── pool-X.lock             # { pid, startedAt, mcpId }
+└── domain-intelligence.json    # Protection levels per domain (shared)
+```
+
+## Multi-Process Support
+
+HydraSpecter uses a **profile pool** to support multiple concurrent MCP processes:
+
+- **5 profiles** in the pool by default (configurable via `--pool-size`)
+- Each process acquires an available profile automatically
+- Stale locks (crashed processes) are auto-detected and reclaimed
+- If all profiles are in use, returns explicit error with suggestion
+
+```javascript
+// If all profiles in use:
+{
+  "error": "All profiles are in use",
+  "lockedProfiles": [
+    { "id": "pool-0", "pid": 12345, "since": "2026-01-05T10:30:00Z" }
+  ],
+  "suggestion": "Close other HydraSpecter sessions or use mode: 'incognito'"
+}
 ```
 
 ## Zero-Config System
 
 ### How It Works
 
-1. **Global Profile**: All browser pages share `~/.hydraspecter/profile/`
-   - Cookies, localStorage, IndexedDB persist automatically
-   - Google OAuth login works across all sites
+1. **Profile Pool**: Each process gets its own profile from the pool
+   - Cookies, localStorage, IndexedDB persist automatically per profile
+   - Google OAuth login works across all sites within a profile
    - No manual session management needed
 
 2. **Domain Intelligence**: Auto-learns which sites need protection
@@ -88,6 +113,8 @@ Navigate → Detection? → Yes → Level++ → Apply new settings
 | `browser_set_protection_level` | Manually set protection level for a domain |
 | `browser_reset_protection` | Reset domain protection to level 0 |
 | `browser_list_domains` | List all domains with learned protection levels |
+| `browser_list_profiles` | List profile pool status (available/locked) |
+| `browser_release_profile` | Force release a stale profile lock |
 
 ### Browser Modes (`browser_create_global`)
 
@@ -103,6 +130,27 @@ browser_create_global({ url: "https://auchan.fr" })  // Uses saved login
 // Anonymous scraping
 browser_create_global({ url: "https://example.com", mode: "incognito" })  // Fresh context
 ```
+
+### Choosing the Right Tool
+
+| Scenario | Tool | Mode |
+|----------|------|------|
+| Login to a site | `browser_create_global` | session |
+| Stay logged in forever | `browser_create_global` | session |
+| Google OAuth (login once, use everywhere) | `browser_create_global` | session |
+| Anonymous scraping | `browser_create_global` | incognito |
+| Price comparison (fresh each time) | `browser_create_global` | incognito |
+| Test in Firefox/WebKit | `browser_create_instance` | - |
+| Custom viewport/user agent | `browser_create_instance` | - |
+| Manual session management | `browser_create_instance` | - |
+
+### Common Mistakes
+
+| Mistake | Problem | Solution |
+|---------|---------|----------|
+| Using `browser_create_instance` for authenticated sites | Sessions lost on close | Use `browser_create_global` (session mode) |
+| Using session mode when scraping same site with different accounts | Accounts conflict | Use `browser_create_global` (incognito mode) |
+| Getting "All profiles in use" error | Too many concurrent MCP processes | Use `browser_list_profiles` then `browser_release_profile` for stale locks |
 
 ### Standard Tools
 
@@ -170,10 +218,10 @@ Detection signals: Cloudflare, CAPTCHAs, DataDome, PerimeterX, rate limits.
 
 ## CLI Options
 
-### Global Profile Options
+### Profile Pool Options
 
 ```bash
---profile-dir <path>      # Custom profile dir (default: ~/.hydraspecter/profile/)
+--pool-size <n>           # Number of profiles in pool (default: 5)
 --global-headless         # Force headless mode (default: false for anti-detection)
 --global-channel <channel> # Browser channel: chrome, msedge
 ```
@@ -234,10 +282,10 @@ With anti-detection:
 ```javascript
 // Create page with auto-session + auto-protection
 browser_create_global({ url: "https://hellofresh.fr" })
-// → Uses ~/.hydraspecter/profile/
+// → Acquires profile from pool (pool-0, pool-1, etc.)
 // → Checks domain-intelligence.json for hellofresh.fr level
 // → Applies appropriate humanize/headless settings
-// → Returns { pageId, url, protectionLevel }
+// → Returns { pageId, url, protectionLevel, profileId }
 
 // Check protection level
 browser_get_protection_level({ url: "https://hellofresh.fr" })

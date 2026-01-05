@@ -37,7 +37,7 @@ program
   .option('--typo-rate <number>', 'Typo rate for human typing (0-1)', (value) => parseFloat(value), 0.02)
   .option('--rate-limit <number>', 'Enable rate limiting with max requests per window', (value) => parseInt(value))
   .option('--rate-limit-window <number>', 'Rate limit window in seconds (default: 60)', (value) => parseInt(value) * 1000, 60000)
-  .option('--profile-dir <path>', 'Global profile directory (default: ~/.hydraspecter/profile/)')
+  .option('--pool-size <number>', 'Number of profiles in pool for multi-process (default: 5)', (value) => parseInt(value), 5)
   .option('--global-headless', 'Run global profile browser in headless mode (default: false for anti-detection)', false)
   .option('--global-channel <channel>', 'Browser channel for global profile: chrome, msedge')
   .action(async (options) => {
@@ -84,7 +84,7 @@ program
         windowMs: options.rateLimitWindow,
       } : undefined,
       globalProfile: {
-        profileDir: options.profileDir,
+        poolSize: options.poolSize,
         headless: options.globalHeadless || false, // Default: visible for anti-detection
         channel: options.globalChannel as 'chrome' | 'msedge' | undefined,
       },
@@ -148,8 +148,8 @@ program
       }
 
       // Display global profile configuration
-      console.error(chalk.magenta('Global Profile (zero-config sessions):'));
-      console.error(chalk.gray(`  Profile dir: ${config.globalProfile?.profileDir || '~/.hydraspecter/profile/'}`));
+      console.error(chalk.magenta('Profile Pool (multi-process sessions):'));
+      console.error(chalk.gray(`  Pool size: ${config.globalProfile?.poolSize || 5} profiles`));
       console.error(chalk.gray(`  Headless: ${config.globalProfile?.headless ? 'yes' : 'no (anti-detection)'}`));
       if (config.globalProfile?.channel) {
         console.error(chalk.green(`  Browser: ${config.globalProfile.channel}`));

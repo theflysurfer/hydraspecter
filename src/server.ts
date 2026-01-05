@@ -35,7 +35,7 @@ export class ConcurrentBrowserServer {
       config.humanize,
       config.rateLimit,
       {
-        profileDir: config.globalProfile?.profileDir,
+        poolSize: config.globalProfile?.poolSize,
         headless: config.globalProfile?.headless ?? false, // Default: visible for anti-detection
         channel: config.globalProfile?.channel,
       }

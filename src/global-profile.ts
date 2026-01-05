@@ -1,16 +1,11 @@
 import { BrowserContext, Page } from 'playwright';
 import { chromium as chromiumExtra } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
+import { getProfilePool, ProfilePool, ProfileStatus } from './profile-pool.js';
 
 // Enable stealth mode
 chromiumExtra.use(StealthPlugin());
-
-/** Default profile directory */
-const DEFAULT_PROFILE_DIR = path.join(os.homedir(), '.hydraspecter', 'profile');
 
 /** Page metadata */
 export interface PageInfo {
@@ -21,47 +16,63 @@ export interface PageInfo {
   lastUsed: Date;
 }
 
+/** Error thrown when all profiles are in use */
+export class AllProfilesInUseError extends Error {
+  public lockedProfiles: ProfileStatus[];
+
+  constructor(lockedProfiles: ProfileStatus[]) {
+    super('All profiles are in use');
+    this.name = 'AllProfilesInUseError';
+    this.lockedProfiles = lockedProfiles;
+  }
+}
+
 /**
- * Manages a single global persistent browser context
+ * Manages a global persistent browser context using profile pool.
  * All pages share the same profile (cookies, localStorage, etc.)
+ * Supports multi-process via profile pool.
  */
 export class GlobalProfile {
   private context: BrowserContext | null = null;
   private pages: Map<string, Page> = new Map();
-  private profileDir: string;
+  private profileDir: string | null = null;
+  private profileId: string | null = null;
+  private profilePool: ProfilePool;
   private headless: boolean;
   private channel?: 'chrome' | 'msedge';
 
   constructor(options?: {
-    profileDir?: string;
     headless?: boolean;
     channel?: 'chrome' | 'msedge';
+    poolSize?: number;
   }) {
-    this.profileDir = options?.profileDir || DEFAULT_PROFILE_DIR;
     this.headless = options?.headless ?? false; // Default: visible for anti-detection
     this.channel = options?.channel;
-    this.ensureProfileDir();
-  }
-
-  /**
-   * Ensure profile directory exists
-   */
-  private ensureProfileDir(): void {
-    if (!fs.existsSync(this.profileDir)) {
-      fs.mkdirSync(this.profileDir, { recursive: true });
-      console.log(`Created global profile directory: ${this.profileDir}`);
-    }
+    this.profilePool = getProfilePool({ poolSize: options?.poolSize });
   }
 
   /**
    * Get or create the global browser context
+   * @throws AllProfilesInUseError if all profiles in the pool are locked
    */
   async getContext(): Promise<BrowserContext> {
     if (this.context) {
       return this.context;
     }
 
-    console.log(`Launching persistent context from: ${this.profileDir}`);
+    // Acquire a profile from the pool
+    const acquired = await this.profilePool.acquireProfile();
+    if (!acquired) {
+      // All profiles are in use
+      const profiles = this.profilePool.listProfiles();
+      throw new AllProfilesInUseError(profiles.filter(p => !p.available));
+    }
+
+    this.profileId = acquired.profileId;
+    this.profileDir = acquired.profilePath;
+
+    console.log(`[GlobalProfile] Acquired profile: ${this.profileId}`);
+    console.log(`[GlobalProfile] Launching persistent context from: ${this.profileDir}`);
 
     const launchOptions: any = {
       headless: this.headless,
@@ -87,19 +98,25 @@ export class GlobalProfile {
     // Use real Chrome if specified
     if (this.channel) {
       launchOptions.channel = this.channel;
-      console.log(`Using browser channel: ${this.channel}`);
+      console.log(`[GlobalProfile] Using browser channel: ${this.channel}`);
     }
 
     this.context = await chromiumExtra.launchPersistentContext(this.profileDir, launchOptions);
 
     // Handle context close
     this.context.on('close', () => {
-      console.log('Global context closed');
+      console.log('[GlobalProfile] Context closed');
       this.context = null;
       this.pages.clear();
+      // Release profile back to pool
+      if (this.profileId) {
+        this.profilePool.releaseProfile(this.profileId);
+        this.profileId = null;
+        this.profileDir = null;
+      }
     });
 
-    console.log(`Global context ready (headless: ${this.headless})`);
+    console.log(`[GlobalProfile] Context ready (headless: ${this.headless}, profile: ${this.profileId})`);
     return this.context;
   }
 
@@ -195,7 +212,16 @@ export class GlobalProfile {
       await this.context.close();
       this.context = null;
       this.pages.clear();
-      console.log('Global profile closed');
+
+      // Release profile back to pool
+      if (this.profileId) {
+        this.profilePool.releaseProfile(this.profileId);
+        console.log(`[GlobalProfile] Released profile: ${this.profileId}`);
+        this.profileId = null;
+        this.profileDir = null;
+      }
+
+      console.log('[GlobalProfile] Profile closed');
     }
   }
 
@@ -209,8 +235,15 @@ export class GlobalProfile {
   /**
    * Get profile directory path
    */
-  getProfileDir(): string {
+  getProfileDir(): string | null {
     return this.profileDir;
+  }
+
+  /**
+   * Get acquired profile ID
+   */
+  getProfileId(): string | null {
+    return this.profileId;
   }
 
   /**
@@ -218,6 +251,20 @@ export class GlobalProfile {
    */
   getPageCount(): number {
     return this.pages.size;
+  }
+
+  /**
+   * List all profiles in the pool
+   */
+  listProfiles(): ProfileStatus[] {
+    return this.profilePool.listProfiles();
+  }
+
+  /**
+   * Force release a profile (for manual cleanup)
+   */
+  forceReleaseProfile(profileId: string): boolean {
+    return this.profilePool.forceReleaseProfile(profileId);
   }
 }
 
@@ -228,9 +275,9 @@ let globalProfileInstance: GlobalProfile | null = null;
  * Get the global profile singleton
  */
 export function getGlobalProfile(options?: {
-  profileDir?: string;
   headless?: boolean;
   channel?: 'chrome' | 'msedge';
+  poolSize?: number;
 }): GlobalProfile {
   if (!globalProfileInstance) {
     globalProfileInstance = new GlobalProfile(options);
@@ -247,3 +294,6 @@ export async function resetGlobalProfile(): Promise<void> {
     globalProfileInstance = null;
   }
 }
+
+// Re-export types from profile-pool
+export { ProfileStatus } from './profile-pool.js';
