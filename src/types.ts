@@ -105,6 +105,8 @@ export interface ClickOptions {
   humanize?: HumanizeMode;  // Use human-like mouse movement (true/false/"auto")
   frame?: string;  // Optional iframe selector to click inside (e.g., "iframe[src*='google']")
   position?: { x: number; y: number };  // Click at absolute coordinates (for cross-origin iframes)
+  index?: number;  // Select nth matching element (0-based) when multiple elements match
+  force?: boolean;  // Force click even if element is obscured by another element
 }
 
 export interface TypeOptions {

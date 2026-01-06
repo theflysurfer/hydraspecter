@@ -1177,6 +1177,15 @@ Use this after clicking a download link. Returns download path and filename.`,
               enum: [true, false, 'auto'],
               description: 'Use human-like mouse movement: true (always), false (never), or "auto" (only when detection signals are found like Cloudflare, CAPTCHAs, rate limits)',
               default: false
+            },
+            index: {
+              type: 'number',
+              description: 'Select nth matching element (0-based). Use when "strict mode violation" error shows multiple elements. E.g., index: 0 for first match.',
+            },
+            force: {
+              type: 'boolean',
+              description: 'Force click even if another element obscures the target. Use when "pointer events intercepted" error occurs.',
+              default: false
             }
           },
           required: ['instanceId']
@@ -2086,7 +2095,9 @@ Reduces tokens by 30-50% for focused queries.`,
             timeout: args.timeout || 30000,
             humanize: args.humanize || false,
             frame: args.frame,
-            position: args.position
+            position: args.position,
+            index: args.index,
+            force: args.force || false
           });
           break;
 
@@ -2652,8 +2663,15 @@ Reduces tokens by 30-50% for focused queries.`,
       if (options.clickCount) clickOptions.clickCount = options.clickCount;
       if (options.delay) clickOptions.delay = options.delay;
       if (options.timeout) clickOptions.timeout = options.timeout;
+      if (options.force) clickOptions.force = true;  // Force click even if obscured
 
-      await target.locator(normalizedSelector).click(clickOptions);
+      // Build locator with optional index for multiple elements
+      let locator = target.locator(normalizedSelector);
+      if (typeof options.index === 'number') {
+        locator = locator.nth(options.index);
+      }
+
+      await locator.click(clickOptions);
       return {
         success: true,
         data: { selector, clicked: true, frame: options.frame },
