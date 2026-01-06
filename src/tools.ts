@@ -55,6 +55,46 @@ import { RateLimiter } from './utils/rate-limiter.js';
 import { getGlobalProfile, GlobalProfile, AllProfilesInUseError } from './global-profile.js';
 import { getDomainIntelligence, DomainIntelligence } from './domain-intelligence.js';
 
+/**
+ * Transform jQuery-style selectors to Playwright-compatible selectors.
+ * Common LLM mistakes:
+ * - :contains('text') → :has-text("text")  (jQuery → Playwright)
+ * - :eq(0) → :nth-child(1)
+ * - :first → :first-child
+ * - :last → :last-child
+ */
+function normalizeSelector(selector: string): string {
+  if (!selector) return selector;
+
+  let normalized = selector;
+
+  // Transform :contains('text') or :contains("text") to :has-text("text")
+  // jQuery: :contains('Portions') → Playwright: :has-text("Portions")
+  normalized = normalized.replace(
+    /:contains\(['"]([^'"]+)['"]\)/g,
+    ':has-text("$1")'
+  );
+
+  // Transform :eq(n) to :nth-child(n+1)
+  normalized = normalized.replace(
+    /:eq\((\d+)\)/g,
+    (_, n) => `:nth-child(${parseInt(n) + 1})`
+  );
+
+  // Transform :first to :first-child
+  normalized = normalized.replace(/:first\b/g, ':first-child');
+
+  // Transform :last to :last-child
+  normalized = normalized.replace(/:last\b/g, ':last-child');
+
+  // Log transformation if changed
+  if (normalized !== selector) {
+    console.log(`[Selector] Normalized: "${selector}" → "${normalized}"`);
+  }
+
+  return normalized;
+}
+
 export class BrowserTools {
   private humanizeConfig: HumanizeConfig;
   private detectionMonitor: DetectionMonitor;
@@ -2582,6 +2622,9 @@ Reduces tokens by 30-50% for focused queries.`,
         return { success: false, error: 'Either selector or position must be provided' };
       }
 
+      // Normalize jQuery-style selectors to Playwright format
+      const normalizedSelector = normalizeSelector(selector);
+
       // Check if humanize should be enabled (supports "auto" mode with detection)
       const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'mouse', options.humanize);
 
@@ -2593,7 +2636,7 @@ Reduces tokens by 30-50% for focused queries.`,
 
       if (useHumanize && !options.frame) {
         // Use human-like mouse movement with Bezier curves (only on main page, not frames)
-        await humanClick(pageResult.page, selector);
+        await humanClick(pageResult.page, normalizedSelector);
         const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.mouse === 'auto';
         return {
           success: true,
@@ -2610,7 +2653,7 @@ Reduces tokens by 30-50% for focused queries.`,
       if (options.delay) clickOptions.delay = options.delay;
       if (options.timeout) clickOptions.timeout = options.timeout;
 
-      await target.locator(selector).click(clickOptions);
+      await target.locator(normalizedSelector).click(clickOptions);
       return {
         success: true,
         data: { selector, clicked: true, frame: options.frame },
@@ -2631,13 +2674,16 @@ Reduces tokens by 30-50% for focused queries.`,
       return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
+    // Normalize jQuery-style selectors to Playwright format
+    const normalizedSelector = normalizeSelector(selector);
+
     try {
       // Check if humanize should be enabled (supports "auto" mode with detection)
       const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'typing', options.humanize);
 
       if (useHumanize) {
         // Use human-like typing with delays and occasional typos
-        await humanTypeInElement(pageResult.page, selector, text);
+        await humanTypeInElement(pageResult.page, normalizedSelector, text);
         const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.typing === 'auto';
         return {
           success: true,
@@ -2650,7 +2696,7 @@ Reduces tokens by 30-50% for focused queries.`,
       const typeOptions: any = {};
       if (options.delay) typeOptions.delay = options.delay;
       if (options.timeout) typeOptions.timeout = options.timeout;
-      await pageResult.page.type(selector, text, typeOptions);
+      await pageResult.page.type(normalizedSelector, text, typeOptions);
       return {
         success: true,
         data: { selector, text, typed: true },
@@ -2671,13 +2717,16 @@ Reduces tokens by 30-50% for focused queries.`,
       return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
+    // Normalize jQuery-style selectors to Playwright format
+    const normalizedSelector = normalizeSelector(selector);
+
     try {
       // Check if humanize should be enabled (supports "auto" mode with detection)
       const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'typing', options.humanize);
 
       if (useHumanize) {
         // Clear field first, then use human-like typing
-        await pageResult.page.click(selector);
+        await pageResult.page.click(normalizedSelector);
         await pageResult.page.keyboard.press('Control+a');
         await pageResult.page.keyboard.press('Backspace');
         await humanType(pageResult.page, value);
@@ -2690,7 +2739,7 @@ Reduces tokens by 30-50% for focused queries.`,
       }
 
       // Standard fill (instant)
-      await pageResult.page.fill(selector, value, { timeout: options.timeout });
+      await pageResult.page.fill(normalizedSelector, value, { timeout: options.timeout });
       return {
         success: true,
         data: { selector, value, filled: true },
@@ -2712,7 +2761,8 @@ Reduces tokens by 30-50% for focused queries.`,
     }
 
     try {
-      await pageResult.page.selectOption(selector, value, { timeout });
+      const normalizedSelector = normalizeSelector(selector);
+      await pageResult.page.selectOption(normalizedSelector, value, { timeout });
       return {
         success: true,
         data: { selector, value, selected: true },
@@ -2743,10 +2793,11 @@ Reduces tokens by 30-50% for focused queries.`,
 
       // If selector provided, scroll to element
       if (options.selector) {
+        const selector = normalizeSelector(options.selector);
         if (useHumanScroll) {
-          await humanScrollToElement(pageResult.page, options.selector);
+          await humanScrollToElement(pageResult.page, selector);
         } else {
-          await pageResult.page.locator(options.selector).scrollIntoViewIfNeeded({ timeout: options.timeout });
+          await pageResult.page.locator(selector).scrollIntoViewIfNeeded({ timeout: options.timeout });
         }
         return {
           success: true,
@@ -2878,7 +2929,8 @@ Reduces tokens by 30-50% for focused queries.`,
     }
 
     try {
-      const text = await pageResult.page.textContent(selector, { timeout });
+      const normalizedSelector = normalizeSelector(selector);
+      const text = await pageResult.page.textContent(normalizedSelector, { timeout });
       return {
         success: true,
         data: { selector, text },
@@ -2900,7 +2952,8 @@ Reduces tokens by 30-50% for focused queries.`,
     }
 
     try {
-      const value = await pageResult.page.getAttribute(selector, attribute, { timeout });
+      const normalizedSelector = normalizeSelector(selector);
+      const value = await pageResult.page.getAttribute(normalizedSelector, attribute, { timeout });
       return {
         success: true,
         data: { selector, attribute, value },
@@ -2923,9 +2976,10 @@ Reduces tokens by 30-50% for focused queries.`,
 
     try {
       let screenshotData: Buffer;
-      
-      if (selector) {
-        const element = await pageResult.page.$(selector);
+      const normalizedSelector = selector ? normalizeSelector(selector) : undefined;
+
+      if (normalizedSelector) {
+        const element = await pageResult.page.$(normalizedSelector);
         if (!element) {
           return { success: false, error: `Element not found: ${selector}`, instanceId };
         }
@@ -2967,7 +3021,8 @@ Reduces tokens by 30-50% for focused queries.`,
     }
 
     try {
-      await pageResult.page.waitForSelector(selector, { timeout });
+      const normalizedSelector = normalizeSelector(selector);
+      await pageResult.page.waitForSelector(normalizedSelector, { timeout });
       return {
         success: true,
         data: { selector, found: true },
