@@ -61,6 +61,7 @@ export interface ServerConfig {
   humanize?: HumanizeConfig; // Global humanize defaults
   rateLimit?: RateLimitConfig; // Rate limiting configuration
   globalProfile?: GlobalProfileConfig; // Zero-config global profile settings
+  enabledTools?: string[]; // List of enabled tool names (for --groups filtering)
 }
 
 /** Legacy internal tool result (used internally before MCP conversion) */

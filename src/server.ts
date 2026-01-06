@@ -15,6 +15,7 @@ export class ConcurrentBrowserServer {
   private server: Server;
   private browserManager: BrowserManager;
   private browserTools: BrowserTools;
+  private enabledTools: string[] | undefined;
 
   constructor(config: ServerConfig) {
     this.server = new Server(
@@ -40,6 +41,7 @@ export class ConcurrentBrowserServer {
         channel: config.globalProfile?.channel,
       }
     );
+    this.enabledTools = config.enabledTools;
 
     this.setupHandlers();
   }
@@ -47,7 +49,13 @@ export class ConcurrentBrowserServer {
   private setupHandlers() {
     // Handle tool list requests
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const tools = this.browserTools.getTools();
+      let tools = this.browserTools.getTools();
+
+      // Filter tools based on enabled groups (--groups option)
+      if (this.enabledTools && this.enabledTools.length > 0) {
+        tools = tools.filter(tool => this.enabledTools!.includes(tool.name));
+      }
+
       return {
         tools: tools,
       };

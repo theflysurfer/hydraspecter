@@ -4,6 +4,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { ConcurrentBrowserServer, defaultConfig } from './server.js';
 import { ServerConfig } from './types.js';
+import { parseGroupsArg, ALL_GROUPS } from './tool-groups.js';
 
 const program = new Command();
 
@@ -40,6 +41,7 @@ program
   .option('--pool-size <number>', 'Number of profiles in pool for multi-process (default: 5)', (value) => parseInt(value), 5)
   .option('--global-headless', 'Run global profile browser in headless mode (default: false for anti-detection)', false)
   .option('--global-channel <channel>', 'Browser channel for global profile: chrome, msedge')
+  .option('--groups <groups>', `Tool groups to enable (comma-separated). Available: ${ALL_GROUPS.join(', ')}, all. Default: all`, 'all')
   .action(async (options) => {
     // Build configuration
     // Determine viewport: null for natural, or specified dimensions
@@ -88,6 +90,7 @@ program
         headless: options.globalHeadless || false, // Default: visible for anti-detection
         channel: options.globalChannel as 'chrome' | 'msedge' | undefined,
       },
+      enabledTools: parseGroupsArg(['--groups=' + options.groups]),
     };
 
     // Start server
@@ -155,6 +158,14 @@ program
         console.error(chalk.green(`  Browser: ${config.globalProfile.channel}`));
       }
       console.error(chalk.gray('  Domain intelligence: auto-learning protection levels'));
+
+      // Display tool groups
+      const toolCount = config.enabledTools?.length || 0;
+      if (options.groups === 'all') {
+        console.error(chalk.gray(`Tool groups: all (${toolCount} tools)`));
+      } else {
+        console.error(chalk.cyan(`Tool groups: ${options.groups} (${toolCount} tools)`));
+      }
       console.error('');
 
       const server = new ConcurrentBrowserServer(config);
