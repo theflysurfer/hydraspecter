@@ -9,13 +9,16 @@ import {
 
 import { BrowserManager } from './browser-manager.js';
 import { BrowserTools } from './tools.js';
+import { MetaTool } from './meta-tool.js';
 import { ServerConfig } from './types.js';
 
 export class ConcurrentBrowserServer {
   private server: Server;
   private browserManager: BrowserManager;
   private browserTools: BrowserTools;
+  private metaTool: MetaTool;
   private enabledTools: string[] | undefined;
+  private useMetaMode: boolean;
 
   constructor(config: ServerConfig) {
     this.server = new Server(
@@ -41,7 +44,9 @@ export class ConcurrentBrowserServer {
         channel: config.globalProfile?.channel,
       }
     );
+    this.metaTool = new MetaTool(this.browserTools);
     this.enabledTools = config.enabledTools;
+    this.useMetaMode = config.metaMode ?? false;
 
     this.setupHandlers();
   }
@@ -49,6 +54,12 @@ export class ConcurrentBrowserServer {
   private setupHandlers() {
     // Handle tool list requests
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      // Meta mode: expose single unified tool (~2k tokens)
+      if (this.useMetaMode) {
+        return { tools: this.metaTool.getTools() };
+      }
+
+      // Standard mode: expose all tools (~31k tokens)
       let tools = this.browserTools.getTools();
 
       // Filter tools based on enabled groups (--groups option)
@@ -66,7 +77,12 @@ export class ConcurrentBrowserServer {
       const { name, arguments: args } = request.params;
 
       try {
-        // executeTools now returns MCP-compliant format directly
+        // Meta mode: route through meta-tool
+        if (this.useMetaMode) {
+          return await this.metaTool.executeTools(name, args || {});
+        }
+
+        // Standard mode: direct execution
         const result = await this.browserTools.executeTools(name, args || {});
         return result;
       } catch (error) {

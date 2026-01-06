@@ -42,6 +42,7 @@ program
   .option('--global-headless', 'Run global profile browser in headless mode (default: false for anti-detection)', false)
   .option('--global-channel <channel>', 'Browser channel for global profile: chrome, msedge')
   .option('--groups <groups>', `Tool groups to enable (comma-separated). Available: ${ALL_GROUPS.join(', ')}, all. Default: all`, 'all')
+  .option('--meta', 'Enable meta-tool mode: single unified "browser" tool (~2k tokens vs ~31k). Zero-config recommended.', false)
   .action(async (options) => {
     // Build configuration
     // Determine viewport: null for natural, or specified dimensions
@@ -91,6 +92,7 @@ program
         channel: options.globalChannel as 'chrome' | 'msedge' | undefined,
       },
       enabledTools: parseGroupsArg(['--groups=' + options.groups]),
+      metaMode: options.meta,
     };
 
     // Start server
@@ -159,12 +161,17 @@ program
       }
       console.error(chalk.gray('  Domain intelligence: auto-learning protection levels'));
 
-      // Display tool groups
-      const toolCount = config.enabledTools?.length || 0;
-      if (options.groups === 'all') {
-        console.error(chalk.gray(`Tool groups: all (${toolCount} tools)`));
+      // Display tool groups or meta mode
+      if (config.metaMode) {
+        console.error(chalk.green('Meta-tool mode: ENABLED (~2k tokens vs ~31k)'));
+        console.error(chalk.gray('  Single "browser" tool with action routing'));
       } else {
-        console.error(chalk.cyan(`Tool groups: ${options.groups} (${toolCount} tools)`));
+        const toolCount = config.enabledTools?.length || 0;
+        if (options.groups === 'all') {
+          console.error(chalk.gray(`Tool groups: all (${toolCount} tools)`));
+        } else {
+          console.error(chalk.cyan(`Tool groups: ${options.groups} (${toolCount} tools)`));
+        }
       }
       console.error('');
 

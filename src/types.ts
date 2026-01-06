@@ -62,6 +62,7 @@ export interface ServerConfig {
   rateLimit?: RateLimitConfig; // Rate limiting configuration
   globalProfile?: GlobalProfileConfig; // Zero-config global profile settings
   enabledTools?: string[]; // List of enabled tool names (for --groups filtering)
+  metaMode?: boolean; // Use single unified 'browser' tool (~2k tokens vs ~31k)
 }
 
 /** Legacy internal tool result (used internally before MCP conversion) */

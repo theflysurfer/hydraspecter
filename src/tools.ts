@@ -3066,10 +3066,20 @@ Reduces tokens by 30-50% for focused queries.`,
     }
 
     try {
-      const result = await pageResult.page.evaluate(script);
+      // Auto-wrap scripts with return statements in IIFE to prevent SyntaxError
+      let wrappedScript = script;
+      const hasReturn = /\breturn\b/.test(script);
+      const isAlreadyIIFE = /^\s*\(\s*(async\s+)?(function|\()/.test(script.trim());
+      const isFunction = /^\s*(async\s+)?function\s/.test(script.trim());
+
+      if (hasReturn && !isAlreadyIIFE && !isFunction) {
+        wrappedScript = `(() => { ${script} })()`;
+      }
+
+      const result = await pageResult.page.evaluate(wrappedScript);
       return {
         success: true,
-        data: { script, result },
+        data: { script: wrappedScript, result },
         instanceId
       };
     } catch (error) {
@@ -3502,7 +3512,15 @@ Reduces tokens by 30-50% for focused queries.`,
             break;
 
           case 'evaluate':
-            const evalResult = await pageResult.page.evaluate(step.args.script);
+            // Auto-wrap scripts with return statements in IIFE
+            let batchScript = step.args.script;
+            const batchHasReturn = /\breturn\b/.test(batchScript);
+            const batchIsIIFE = /^\s*\(\s*(async\s+)?(function|\()/.test(batchScript.trim());
+            const batchIsFunction = /^\s*(async\s+)?function\s/.test(batchScript.trim());
+            if (batchHasReturn && !batchIsIIFE && !batchIsFunction) {
+              batchScript = `(() => { ${batchScript} })()`;
+            }
+            const evalResult = await pageResult.page.evaluate(batchScript);
             stepResult.result = evalResult;
             break;
 
