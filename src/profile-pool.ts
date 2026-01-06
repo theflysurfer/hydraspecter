@@ -109,6 +109,23 @@ export class ProfilePool {
   }
 
   /**
+   * Check if Chrome's native lockfile is active (another Chrome has the profile open)
+   */
+  private isChromeLockActive(profilePath: string): boolean {
+    const chromeLockFile = path.join(profilePath, 'lockfile');
+    if (!fs.existsSync(chromeLockFile)) return false;
+
+    try {
+      // Try to open for writing - if Chrome has it locked, this fails on Windows
+      const fd = fs.openSync(chromeLockFile, 'r+');
+      fs.closeSync(fd);
+      return false; // We could open it, so it's not locked by Chrome
+    } catch {
+      return true; // Locked by another Chrome process
+    }
+  }
+
+  /**
    * Check if a lock is stale (process no longer running)
    */
   private isLockStale(lockPath: string): boolean {
@@ -150,7 +167,13 @@ export class ProfilePool {
       const lockPath = this.getLockPath(profileId);
       const profilePath = path.join(this.profilesDir, profileId);
 
-      // Check if lock exists
+      // Check Chrome's native lock first (another Chrome may have the profile open)
+      if (this.isChromeLockActive(profilePath)) {
+        console.log(`[ProfilePool] Profile ${profileId} locked by Chrome, trying next`);
+        continue;
+      }
+
+      // Check if our lock exists
       if (!fs.existsSync(lockPath)) {
         // Create lock
         const lock: ProfileLock = {
