@@ -11,7 +11,7 @@
 export const TOOL_GROUPS = {
   // Core tools - always recommended, covers 90% of use cases
   core: [
-    'browser_create_global',
+    'browser_create',
     'browser_navigate',
     'browser_click',
     'browser_type',
@@ -78,7 +78,7 @@ export const TOOL_GROUPS = {
   // Device emulation & isolated instances
   devices: [
     'browser_list_devices',
-    'browser_create_instance'
+    'browser_create'
   ],
 
   // Element inspection

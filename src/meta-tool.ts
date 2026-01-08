@@ -13,9 +13,7 @@ import { BrowserTools } from './tools.js';
 // Action mappings: short action name → internal tool name
 const ACTION_MAP: Record<string, string> = {
   // Session management
-  'create': 'browser_create_global',
-  'create_global': 'browser_create_global',
-  'create_instance': 'browser_create_instance',
+  'create': 'browser_create',
   'close': 'browser_close_instance',
   'close_all': 'browser_close_all_instances',
   'list': 'browser_list_instances',
@@ -234,7 +232,7 @@ export class MetaTool {
         if (text) result['text'] = text;
         break;
 
-      case 'browser_create_global':
+      case 'browser_create':
         if (target) result['url'] = target;
         break;
 

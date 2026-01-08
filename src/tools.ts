@@ -397,40 +397,66 @@ export class BrowserTools {
    */
   getTools(): Tool[] {
     return [
-      // Instance management tools
+      // Browser creation tool (unified)
       {
-        name: 'browser_create_instance',
-        description: `⚠️ ISOLATED CONTEXT - Sessions are LOST when closed. NO saved logins.
+        name: 'browser_create',
+        description: `Create a browser page.
 
-🚫 DO NOT USE for: Notion, Google, Amazon, any site where you expect to be logged in.
-✅ USE browser_create_global INSTEAD for authenticated browsing.
+🔑 DEFAULT: Use without parameters for Google, Amazon, Notion, GitHub - sessions persist forever, no login needed!
 
-This tool creates a FRESH browser with NO cookies, NO saved sessions.
-Every login will need to be done again.
+✅ PERSISTENT MODE (default):
+• Cookies/localStorage saved automatically
+• Google OAuth works - login once, use everywhere
+• Best anti-detection (headless=false, stealth enabled)
+• Recommended for 90% of use cases
 
-Only use browser_create_instance when you specifically need:
-• Complete isolation (different accounts on same site)
+**Modes:**
+• persistent (default): Session persists between MCP restarts, perfect for authenticated sites
+• incognito: Fresh context each time, no saved data, still uses profile pool for anti-detection
+• isolated: Completely separate browser (Firefox/WebKit, device emulation, multi-account)
+
+**Examples:**
+• Default (persistent) → browser_create({ url: "https://google.com" })
+• Anonymous scraping → browser_create({ mode: "incognito", url: "https://example.com" })
+• Mobile testing → browser_create({ mode: "isolated", device: "iPhone 14" })
+• Firefox testing → browser_create({ mode: "isolated", browserType: "firefox" })
+
+⚠️ ISOLATED MODE - Only use when you specifically need:
 • Non-Chromium browsers (Firefox, WebKit)
 • Device emulation (mobile, tablet)
+• Multiple accounts on same site simultaneously
+• Custom viewport or user agent
+Note: Isolated mode creates a fresh browser each time (no session persistence by default)
 
-For 90% of tasks, use browser_create_global which preserves sessions.`,
+Returns id to use with other browser_* tools.`,
         inputSchema: {
           type: 'object',
           properties: {
+            url: {
+              type: 'string',
+              description: 'Optional URL to navigate to after creating the browser'
+            },
+            mode: {
+              type: 'string',
+              enum: ['persistent', 'incognito', 'isolated'],
+              description: 'Browser mode (default: persistent)',
+              default: 'persistent'
+            },
+            // Options for isolated mode only
             browserType: {
               type: 'string',
               enum: ['chromium', 'firefox', 'webkit'],
-              description: 'Browser engine. Use "chromium" for best compatibility.',
+              description: 'Browser engine (isolated mode only). Use "chromium" for best compatibility.',
               default: 'chromium'
             },
             headless: {
               type: 'boolean',
-              description: 'Run without visible window. Set to false for better anti-detection.',
-              default: true
+              description: 'Run without visible window (isolated mode only). Default false for better anti-detection.',
+              default: false
             },
             device: {
               type: 'string',
-              description: 'Device to emulate (e.g., "iPhone 14", "Pixel 7", "iPad Pro 11"). Sets viewport, userAgent, touch support automatically. Use browser_list_devices for full list.'
+              description: 'Device to emulate (isolated mode only). E.g., "iPhone 14", "Pixel 7", "iPad Pro 11". Use browser_list_devices for full list.'
             },
             viewport: {
               type: 'object',
@@ -438,25 +464,26 @@ For 90% of tasks, use browser_create_global which preserves sessions.`,
                 width: { type: 'number', default: 1280 },
                 height: { type: 'number', default: 720 }
               },
-              description: 'Fixed viewport size. Ignored if device is specified. Omit or set to null for natural viewport.'
+              description: 'Fixed viewport size (isolated mode only). Ignored if device is specified.'
             },
             userAgent: {
               type: 'string',
-              description: 'Custom user agent. Ignored if device is specified. Not recommended - browser default is less detectable.'
+              description: 'Custom user agent (isolated mode only). Ignored if device is specified. Not recommended - browser default is less detectable.'
             },
             metadata: {
               type: 'object',
               properties: {
-                name: { type: 'string', description: 'Human-readable name for this instance' },
-                description: { type: 'string', description: 'What this instance is used for' },
+                name: { type: 'string', description: 'Human-readable name for this browser' },
+                description: { type: 'string', description: 'What this browser is used for' },
                 tags: { type: 'array', items: { type: 'string' }, description: 'Tags for filtering (e.g., ["shopping", "temu"])' }
               },
-              description: 'Optional metadata to identify the instance in browser_list_instances'
+              description: 'Optional metadata (isolated mode only)'
             },
             storageStatePath: {
               type: 'string',
-              description: 'Path to JSON file from browser_save_session. Restores cookies and localStorage to skip login.'
+              description: 'Path to JSON file from browser_save_session (isolated mode only). Restores cookies and localStorage.'
             },
+            // Monitoring options (all modes)
             enableConsoleCapture: {
               type: 'boolean',
               description: 'Enable console log capture. Use browser_get_console_logs to retrieve.',
@@ -472,11 +499,22 @@ For 90% of tasks, use browser_create_global which preserves sessions.`,
         outputSchema: {
           type: 'object',
           properties: {
-            instanceId: { type: 'string', description: 'Unique identifier for this browser instance' },
-            browserType: { type: 'string' },
+            id: { type: 'string', description: 'Unique identifier - use this as instanceId in other tools' },
+            mode: { type: 'string', description: 'Browser mode: persistent/incognito/isolated' },
+            url: { type: 'string' },
+            browserType: { type: 'string', description: 'Browser engine (isolated mode only)' },
+            protectionLevel: { type: 'number', description: 'Current protection level 0-3 (persistent/incognito modes)' },
+            settings: {
+              type: 'object',
+              properties: {
+                humanize: { type: 'boolean' },
+                headless: { type: 'boolean' }
+              }
+            },
+            profileDir: { type: 'string', description: 'Path to persistent profile (persistent mode only)' },
             createdAt: { type: 'string', description: 'ISO timestamp' }
           },
-          required: ['instanceId']
+          required: ['id', 'mode']
         }
       },
       {
@@ -487,7 +525,7 @@ For 90% of tasks, use browser_create_global which preserves sessions.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             filePath: {
               type: 'string',
@@ -507,59 +545,6 @@ For 90% of tasks, use browser_create_global which preserves sessions.`,
       },
 
       // Zero-config global profile tools
-      {
-        name: 'browser_create_global',
-        description: `🔑 DEFAULT CHOICE - Use this for 90% of browsing tasks.
-
-✅ ALREADY LOGGED IN: Notion, Google, Amazon, GitHub, etc. - sessions persist automatically.
-✅ No need to login again - cookies and localStorage are saved.
-
-**ALWAYS use this tool unless you have a specific reason not to.**
-
-**Modes:**
-• session (default): Uses saved logins, cookies persist between sessions
-• incognito: Fresh context for anonymous browsing
-
-**Examples:**
-• Notion → Already logged in, will see your workspace
-• Google → Already authenticated
-• Any site you've logged into before → Session restored
-
-Returns pageId to use with other browser_* tools.`,
-        inputSchema: {
-          type: 'object',
-          properties: {
-            url: {
-              type: 'string',
-              description: 'Optional URL to navigate to after creating the page'
-            },
-            mode: {
-              type: 'string',
-              enum: ['session', 'incognito'],
-              description: 'Browser mode: "session" (default) uses persistent profile with saved logins, "incognito" starts fresh with no cookies/history',
-              default: 'session'
-            }
-          }
-        },
-        outputSchema: {
-          type: 'object',
-          properties: {
-            pageId: { type: 'string', description: 'Unique identifier - use this as instanceId in other tools' },
-            url: { type: 'string' },
-            mode: { type: 'string', description: 'Browser mode: "session" or "incognito"' },
-            protectionLevel: { type: 'number', description: 'Current protection level (0-3) for this domain' },
-            settings: {
-              type: 'object',
-              properties: {
-                humanize: { type: 'boolean' },
-                headless: { type: 'boolean' }
-              }
-            },
-            profileDir: { type: 'string', description: 'Path to persistent Chrome profile (only in session mode)' }
-          },
-          required: ['pageId', 'mode']
-        }
-      },
       {
         name: 'browser_get_protection_level',
         description: `Get the current protection level for a domain. Levels are AUTO-LEARNED from detection events:
@@ -732,7 +717,7 @@ Returns: { released: true, contextClosed: true } when browser was closed.
         name: 'browser_list_devices',
         description: `List all available devices for emulation.
 
-Returns device names that can be used with browser_create_instance's device parameter.
+Returns device names that can be used with browser_create in isolated mode.
 Common devices: "iPhone 14", "iPhone 14 Pro Max", "Pixel 7", "iPad Pro 11", "Galaxy S23".`,
         inputSchema: {
           type: 'object',
@@ -1006,7 +991,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             }
           },
           required: ['instanceId']
@@ -1045,7 +1030,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             url: {
               type: 'string',
@@ -1082,7 +1067,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             }
           },
           required: ['instanceId']
@@ -1096,7 +1081,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             }
           },
           required: ['instanceId']
@@ -1110,7 +1095,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             }
           },
           required: ['instanceId']
@@ -1132,7 +1117,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             selector: {
               type: 'string',
@@ -1209,7 +1194,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             selector: {
               type: 'string',
@@ -1258,7 +1243,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             selector: {
               type: 'string',
@@ -1291,7 +1276,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             selector: {
               type: 'string',
@@ -1318,7 +1303,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             direction: {
               type: 'string',
@@ -1360,7 +1345,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             }
           },
           required: ['instanceId']
@@ -1374,7 +1359,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             selector: {
               type: 'string',
@@ -1397,7 +1382,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             selector: {
               type: 'string',
@@ -1426,7 +1411,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             fullPage: {
               type: 'boolean',
@@ -1473,7 +1458,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             selector: {
               type: 'string',
@@ -1496,7 +1481,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             timeout: {
               type: 'number',
@@ -1517,7 +1502,7 @@ Use this after clicking a download link. Returns download path and filename.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             script: {
               type: 'string',
@@ -1543,7 +1528,7 @@ Instead of just cutting off at maxLength.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             includeLinks: {
               type: 'boolean',
@@ -1585,7 +1570,7 @@ Reduces tokens by 30-50% for focused queries.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID (from browser_create_instance) or Page ID (from browser_create_global)'
+              description: 'Browser ID from browser_create'
             },
             selector: {
               type: 'string',
@@ -1625,7 +1610,7 @@ Reduces tokens by 30-50% for focused queries.`,
           properties: {
             instanceId: {
               type: 'string',
-              description: 'Instance ID from browser_create_instance'
+              description: 'Browser ID from browser_create (isolated mode)'
             },
             steps: {
               type: 'array',
@@ -1707,51 +1692,96 @@ Reduces tokens by 30-50% for focused queries.`,
       let isImageResult = false;
 
       switch (name) {
-        case 'browser_create_instance': {
-          // Handle device emulation
-          let viewport = args.viewport || { width: 1280, height: 720 };
-          let userAgent = args.userAgent;
+        case 'browser_create': {
+          const mode = args.mode || 'persistent';
 
-          if (args.device) {
-            const deviceConfig = devices[args.device as keyof typeof devices];
-            if (deviceConfig) {
-              viewport = deviceConfig.viewport;
-              userAgent = deviceConfig.userAgent;
+          if (mode === 'isolated') {
+            // Isolated mode: use BrowserManager (separate instance)
+            let viewport = args.viewport || { width: 1280, height: 720 };
+            let userAgent = args.userAgent;
+
+            if (args.device) {
+              const deviceConfig = devices[args.device as keyof typeof devices];
+              if (deviceConfig) {
+                viewport = deviceConfig.viewport;
+                userAgent = deviceConfig.userAgent;
+              }
             }
-          }
 
-          result = await this.browserManager.createInstance(
-            {
-              browserType: args.browserType || 'chromium',
-              headless: args.headless ?? true,
-              viewport,
-              userAgent,
-              storageStatePath: args.storageStatePath
-            },
-            args.metadata
-          );
+            result = await this.browserManager.createInstance(
+              {
+                browserType: args.browserType || 'chromium',
+                headless: args.headless ?? false, // Default false for better anti-detection
+                viewport,
+                userAgent,
+                storageStatePath: args.storageStatePath
+              },
+              args.metadata
+            );
 
-          // Setup console capture if enabled
-          if (result.success && result.instanceId && args.enableConsoleCapture) {
-            const instance = this.browserManager.getInstance(result.instanceId);
-            if (instance) {
-              this.setupConsoleCapture(result.instanceId, instance.page);
+            // Setup console capture if enabled
+            if (result.success && result.instanceId && args.enableConsoleCapture) {
+              const instance = this.browserManager.getInstance(result.instanceId);
+              if (instance) {
+                this.setupConsoleCapture(result.instanceId, instance.page);
+              }
             }
-          }
 
-          // Setup network monitoring if enabled
-          if (result.success && result.instanceId && args.enableNetworkMonitoring) {
-            const instance = this.browserManager.getInstance(result.instanceId);
-            if (instance) {
-              this.setupNetworkMonitoring(result.instanceId, instance.page);
+            // Setup network monitoring if enabled
+            if (result.success && result.instanceId && args.enableNetworkMonitoring) {
+              const instance = this.browserManager.getInstance(result.instanceId);
+              if (instance) {
+                this.setupNetworkMonitoring(result.instanceId, instance.page);
+              }
             }
-          }
 
-          // Setup download handling
-          if (result.success && result.instanceId) {
-            const instance = this.browserManager.getInstance(result.instanceId);
-            if (instance) {
-              this.setupDownloadHandling(result.instanceId, instance.page);
+            // Setup download handling
+            if (result.success && result.instanceId) {
+              const instance = this.browserManager.getInstance(result.instanceId);
+              if (instance) {
+                this.setupDownloadHandling(result.instanceId, instance.page);
+              }
+            }
+
+            // Transform output to match new schema
+            if (result.success && result.data) {
+              result.data = {
+                id: result.data.instanceId,
+                mode: 'isolated',
+                browserType: result.data.browserType,
+                createdAt: result.data.createdAt
+              };
+            }
+          } else {
+            // Persistent or incognito mode: use GlobalProfile
+            const globalMode = mode === 'incognito' ? 'incognito' : 'session';
+            result = await this.createGlobalPage(args.url, globalMode);
+
+            // Setup console/network monitoring if enabled
+            if (result.success && result.data?.pageId) {
+              const page = this.globalPages.get(result.data.pageId);
+              if (page) {
+                if (args.enableConsoleCapture) {
+                  this.setupConsoleCapture(result.data.pageId, page);
+                }
+                if (args.enableNetworkMonitoring) {
+                  this.setupNetworkMonitoring(result.data.pageId, page);
+                }
+                this.setupDownloadHandling(result.data.pageId, page);
+              }
+            }
+
+            // Transform output to match new schema
+            if (result.success && result.data) {
+              result.data = {
+                id: result.data.pageId,
+                mode: mode,
+                url: result.data.url,
+                protectionLevel: result.data.protectionLevel,
+                settings: result.data.settings,
+                profileDir: result.data.profileDir,
+                createdAt: new Date().toISOString()
+              };
             }
           }
           break;
@@ -1789,10 +1819,6 @@ Reduces tokens by 30-50% for focused queries.`,
           }
           break;
         }
-
-        case 'browser_create_global':
-          result = await this.createGlobalPage(args.url, args.mode || 'session');
-          break;
 
         case 'browser_get_protection_level':
           result = this.getProtectionLevel(args.url);
@@ -2454,7 +2480,7 @@ Reduces tokens by 30-50% for focused queries.`,
 
   /**
    * Get a Page from either instanceId or pageId
-   * This enables tools to work with both browser_create_instance and browser_create_global
+   * This enables tools to work with all browser_create modes (persistent, incognito, isolated)
    */
   private getPageFromId(id: string): { page: Page; source: 'instance' | 'global' } | null {
     // First try as instanceId

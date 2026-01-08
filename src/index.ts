@@ -222,13 +222,12 @@ program
     console.log(chalk.gray('    }'));
     console.log(chalk.gray('  }\n'));
     
-    console.log(chalk.yellow('9. Zero-config tools (recommended):'));
-    console.log(chalk.gray('  - browser_create_global: Create page with global profile (auto session + anti-detection)'));
+    console.log(chalk.yellow('9. Browser creation (unified tool):'));
+    console.log(chalk.gray('  - browser_create: Create browser (modes: persistent/incognito/isolated)'));
     console.log(chalk.gray('  - browser_get_protection_level: Check domain protection level'));
     console.log(chalk.gray('  - browser_reset_protection: Reset domain protection to level 0\n'));
 
     console.log(chalk.yellow('10. Standard tools:'));
-    console.log(chalk.gray('  - browser_create_instance: Create browser instance'));
     console.log(chalk.gray('  - browser_list_instances: List all instances'));
     console.log(chalk.gray('  - browser_navigate: Navigate to URL (with detection feedback)'));
     console.log(chalk.gray('  - browser_click: Click element (humanize: true/false/auto)'));

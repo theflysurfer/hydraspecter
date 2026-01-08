@@ -112,61 +112,67 @@ Navigate → Detection? → Yes → Level++ → Apply new settings
 
 ## MCP Tools
 
-### Zero-Config Tools (Recommended)
+### Browser Creation (Unified Tool)
+
+**One tool to rule them all:** `browser_create`
+
+| Mode | Use Case | Example |
+|------|----------|---------|
+| `persistent` (default) | Google, Amazon, Notion - sessions persist forever | `browser_create({ url: "https://google.com" })` |
+| `incognito` | Anonymous scraping, fresh context each time | `browser_create({ mode: "incognito" })` |
+| `isolated` | Firefox/WebKit, device emulation, multi-account | `browser_create({ mode: "isolated", device: "iPhone 14" })` |
+
+```javascript
+// Default: persistent mode (saves logins, best for 90% of use cases)
+browser_create({ url: "https://google.com" })
+// → Returns { id: "page-123", mode: "persistent", protectionLevel: 0 }
+
+// Incognito: fresh context for anonymous browsing
+browser_create({ url: "https://example.com", mode: "incognito" })
+
+// Isolated: for device emulation or Firefox/WebKit
+browser_create({ mode: "isolated", device: "iPhone 14" })
+browser_create({ mode: "isolated", browserType: "firefox" })
+```
+
+### Choosing the Right Mode
+
+| Scenario | Mode | Why |
+|----------|------|-----|
+| Google login | persistent (default) | ✅ Persistent session + best anti-detection |
+| Amazon shopping | persistent | ✅ Stay logged in forever |
+| Notion workspace | persistent | ✅ Session persists across MCP restarts |
+| Anonymous scraping | incognito | Fresh context but still uses profile pool |
+| Price comparison | incognito | No cookies between runs |
+| Mobile testing | isolated | Device emulation requires isolated mode |
+| Firefox/WebKit | isolated | Non-Chromium browsers require isolated mode |
+| Multiple Google accounts | isolated | Different account per browser |
+
+### Protection & Profile Management
 
 | Tool | Description |
 |------|-------------|
-| `browser_create_global` | Create page with global profile or incognito mode |
-| `browser_get_protection_level` | Check domain's current protection level |
+| `browser_get_protection_level` | Check domain's current protection level (0-3) |
 | `browser_set_protection_level` | Manually set protection level for a domain |
 | `browser_reset_protection` | Reset domain protection to level 0 |
 | `browser_list_domains` | List all domains with learned protection levels |
 | `browser_list_profiles` | List profile pool status (available/locked) |
 | `browser_release_profile` | Force release profile AND close its browser (unlocks files) |
 
-### Browser Modes (`browser_create_global`)
+### Common Mistakes (BEFORE the unified tool)
 
-| Mode | Use Case | Behavior |
-|------|----------|----------|
-| `session` (default) | Authenticated sites | Persistent cookies, localStorage, Google OAuth |
-| `incognito` | Scraping, anonymous | Fresh context, no stored data |
+These mistakes are now **impossible** with the unified `browser_create`:
 
-```javascript
-// Authenticated browsing (default)
-browser_create_global({ url: "https://auchan.fr" })  // Uses saved login
-
-// Anonymous scraping
-browser_create_global({ url: "https://example.com", mode: "incognito" })  // Fresh context
-```
-
-### Choosing the Right Tool
-
-| Scenario | Tool | Mode |
-|----------|------|------|
-| Login to a site | `browser_create_global` | session |
-| Stay logged in forever | `browser_create_global` | session |
-| Google OAuth (login once, use everywhere) | `browser_create_global` | session |
-| Anonymous scraping | `browser_create_global` | incognito |
-| Price comparison (fresh each time) | `browser_create_global` | incognito |
-| Test in Firefox/WebKit | `browser_create_instance` | - |
-| Custom viewport/user agent | `browser_create_instance` | - |
-| Manual session management | `browser_create_instance` | - |
-
-### Common Mistakes
-
-| Mistake | Problem | Solution |
-|---------|---------|----------|
-| Using `browser_create_instance` for Notion/Google/etc | **Sessions LOST** - need to login again | Use `browser_create_global` (DEFAULT) |
-| Using session mode for different accounts on same site | Accounts conflict | Use `browser_create_global` (incognito mode) |
-| Getting "All profiles in use" error | Too many concurrent MCP processes | Use `browser_list_profiles` then `browser_release_profile` |
-
-**IMPORTANT:** `browser_create_global` should be used for 90% of browsing tasks. It preserves logins.
+| Old Mistake | Why It Happened | New Solution |
+|-------------|-----------------|--------------|
+| Using `browser_create_instance` for Google | Two tools were confusing | Just use `browser_create()` with defaults! |
+| "Which tool do I use?" | Choice paralysis | One tool, smart defaults |
+| "Browser unsafe" error from Google | Wrong defaults in old tool | Default mode=persistent, headless=false |
 
 ### Standard Tools
 
 | Tool | Description |
 |------|-------------|
-| `browser_create_instance` | Create isolated browser instance (supports device emulation) |
 | `browser_navigate` | Navigate with detection feedback |
 | `browser_click` | Click (humanize: true/false/auto) |
 | `browser_type` | Type text (humanize: true/false/auto) |
@@ -175,23 +181,18 @@ browser_create_global({ url: "https://example.com", mode: "incognito" })  // Fre
 | `browser_screenshot` | Take screenshot |
 | `browser_snapshot` | Get ARIA tree (token-efficient) |
 | `browser_batch_execute` | Multiple operations in one call |
-| `browser_save_session` | Save session state (works with both instanceId AND pageId) |
-| `browser_close_instance` | Close instance |
-| `browser_close_all_instances` | Close all instances |
+| `browser_save_session` | Save session state |
+| `browser_close_instance` | Close browser |
+| `browser_close_all_instances` | Close all browsers |
 
 ### Device Emulation
 
-| Tool | Description |
-|------|-------------|
-| `browser_list_devices` | List available devices (iPhone, Pixel, iPad, etc.) |
-| `browser_create_instance` | Use `device` param: `{ device: "iPhone 14" }` |
-
 ```javascript
-// Mobile emulation
-browser_create_instance({ device: "iPhone 14", headless: false })
+// Mobile emulation (requires isolated mode)
+browser_create({ mode: "isolated", device: "iPhone 14" })
 
 // Tablet emulation
-browser_create_instance({ device: "iPad Pro 11" })
+browser_create({ mode: "isolated", device: "iPad Pro 11" })
 
 // List available devices
 browser_list_devices({ filter: "iphone" })
@@ -207,8 +208,12 @@ browser_list_devices({ filter: "iphone" })
 | `browser_get_network_logs` | Get captured requests (filter by type/URL) |
 
 ```javascript
-// Enable at instance creation
-browser_create_instance({ enableConsoleCapture: true, enableNetworkMonitoring: true })
+// Enable at browser creation (works with all modes)
+browser_create({
+  url: "https://example.com",
+  enableConsoleCapture: true,
+  enableNetworkMonitoring: true
+})
 
 // Or enable later
 browser_enable_console_capture({ instanceId: "..." })
@@ -241,11 +246,9 @@ All tools prefixed with `browser_`.
 
 ### ID Compatibility
 
-All tools accept either:
-- `instanceId` from `browser_create_instance`
-- `pageId` from `browser_create_global`
+All tools accept the `id` (or `instanceId` for backwards compatibility) returned from `browser_create`.
 
-This means you can mix and match - create a page with `browser_create_global` and use `browser_click`, `browser_type`, etc. with the returned `pageId`.
+This works regardless of which mode you used (persistent, incognito, or isolated).
 
 ### Clicking Cross-Origin Iframes (Google Sign-In)
 
@@ -432,41 +435,68 @@ With anti-detection:
 
 ## Usage Examples
 
-### Zero-Config (Recommended)
+### Persistent Mode (Recommended for 90% of use cases)
 
 ```javascript
-// Create page with auto-session + auto-protection
-browser_create_global({ url: "https://hellofresh.fr" })
+// Create browser with persistent session
+const result = browser_create({ url: "https://google.com" })
 // → Acquires profile from pool (pool-0, pool-1, etc.)
-// → Checks domain-intelligence.json for hellofresh.fr level
+// → Checks domain-intelligence.json for protection level
 // → Applies appropriate humanize/headless settings
-// → Returns { pageId, url, protectionLevel, profileId }
+// → Returns { id: "page-abc", mode: "persistent", protectionLevel: 0, profileDir: "..." }
 
-// Check protection level
-browser_get_protection_level({ url: "https://hellofresh.fr" })
-// → { domain: "hellofresh.fr", level: 2, settings: {...} }
+// Google login persists forever - login once, use everywhere!
+// Next time you create a browser, you'll still be logged in
 
-// Reset if needed
-browser_reset_protection({ url: "https://hellofresh.fr" })
+// Check/adjust protection level
+browser_get_protection_level({ url: "https://google.com" })
+// → { domain: "google.com", level: 0, settings: {...} }
+```
+
+### Incognito Mode (Anonymous scraping)
+
+```javascript
+// Fresh context each time
+browser_create({
+  url: "https://example.com",
+  mode: "incognito"
+})
+// → Returns { id: "page-xyz", mode: "incognito" }
+// No cookies, no localStorage, fresh start
+```
+
+### Isolated Mode (Device emulation, Firefox/WebKit)
+
+```javascript
+// Mobile device emulation
+browser_create({
+  mode: "isolated",
+  device: "iPhone 14"
+})
+
+// Firefox testing
+browser_create({
+  mode: "isolated",
+  browserType: "firefox",
+  headless: false
+})
 ```
 
 ### Standard Workflow
 
 ```javascript
-// Create instance
-browser_create_instance({ headless: false })
-// → { instanceId: "abc123" }
+// Create browser (default: persistent mode)
+const { id } = browser_create({ url: "https://example.com" })
 
-// Navigate (detection feedback included)
-browser_navigate({ instanceId: "abc123", url: "https://example.com" })
-// → { success: true, detection: { detected: false } }
+// Navigate
+browser_navigate({ instanceId: id, url: "https://example.com/login" })
 
 // Interact
-browser_click({ instanceId: "abc123", selector: "#login", humanize: "auto" })
-browser_type({ instanceId: "abc123", selector: "#email", text: "...", humanize: true })
+browser_click({ instanceId: id, selector: "#login", humanize: "auto" })
+browser_type({ instanceId: id, selector: "#email", text: "user@example.com" })
 
 // Get page state
-browser_snapshot({ instanceId: "abc123" })
+browser_snapshot({ instanceId: id })
 // → ARIA tree (token-efficient)
 ```
 
