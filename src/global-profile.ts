@@ -90,6 +90,9 @@ export class GlobalProfile {
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
+        '--disable-features=IsolateOrigins,site-per-process',  // Better compatibility, less detectable
+        '--disable-site-isolation-trials',  // Disable site isolation
+        '--disable-web-security',  // Allow cross-origin requests (use with caution)
       ],
       // Natural viewport (anti-detection)
       viewport: null,

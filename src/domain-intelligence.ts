@@ -30,6 +30,19 @@ export interface ProtectionSettings {
 const DEFAULT_INTELLIGENCE_PATH = path.join(os.homedir(), '.hydraspecter', 'domain-intelligence.json');
 
 /**
+ * Known difficult domains that require high protection by default
+ */
+const HIGH_PROTECTION_DOMAINS = new Set([
+  'tidal.com',
+  'spotify.com',
+  'netflix.com',
+  'hulu.com',
+  'disneyplus.com',
+  'amazon.com',
+  'primevideo.com',
+]);
+
+/**
  * Protection settings per level
  */
 const PROTECTION_LEVELS: Record<ProtectionLevel, ProtectionSettings> = {
@@ -146,6 +159,13 @@ export class DomainIntelligence {
   getLevel(url: string): ProtectionLevel {
     const domain = this.getRootDomain(url);
     const profile = this.profiles.get(domain);
+
+    // If no profile exists and it's a known difficult domain, start with level 2
+    if (!profile && HIGH_PROTECTION_DOMAINS.has(domain)) {
+      console.log(`[DomainIntelligence] ${domain} is a known difficult domain, using protection level 2`);
+      return 2;
+    }
+
     return profile?.level ?? 0;
   }
 
