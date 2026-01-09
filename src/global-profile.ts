@@ -76,12 +76,11 @@ export class GlobalProfile {
 
     const launchOptions: any = {
       headless: this.headless,
-      // Anti-detection flags
+      // Anti-detection flags (recommended by Gemini 2025-2026)
       ignoreDefaultArgs: ['--enable-automation'],
       args: [
         '--start-maximized',
         '--no-sandbox',
-        '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
         '--disable-infobars',
         '--disable-dev-shm-usage',
@@ -90,12 +89,14 @@ export class GlobalProfile {
         '--disable-background-timer-throttling',
         '--disable-backgrounding-occluded-windows',
         '--disable-renderer-backgrounding',
-        '--disable-features=IsolateOrigins,site-per-process',  // Better compatibility, less detectable
-        '--disable-site-isolation-trials',  // Disable site isolation
-        '--disable-web-security',  // Allow cross-origin requests (use with caution)
+        // Modern anti-fingerprinting flags (Gemini 2025-2026)
+        '--disable-features=IsOledReady,ImprovedCookieControls,LazyFrameLoading,GlobalMediaControls,DestroyProfileOnBrowserClose,MediaRouter,AcceptCHFrame,OptimizationHints',
+        '--enable-features=NetworkService,NetworkServiceInProcess',
       ],
-      // Natural viewport (anti-detection)
-      viewport: null,
+      // Realistic viewport for anti-detection (Gemini recommendation)
+      viewport: { width: 1440, height: 900 },
+      // Modern User-Agent (Gemini recommendation)
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
     };
 
     // Use real Chrome if specified
