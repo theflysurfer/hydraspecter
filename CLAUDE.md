@@ -64,17 +64,15 @@ Detection triggers automatic level increment. Persists to `~/.hydraspecter/domai
 
 ## Troubleshooting
 
+### Not logged in (session not synced)
+Chrome must be **closed** for auto-sync to copy cookies. If Chrome is open:
+1. Close Chrome → restart Claude Code → sessions will sync
+2. Or login manually in HydraSpecter browser (session persists in pool-0)
+
 ### Click fails on SPA (React/Vue)
 ```javascript
-// Use index for multiple matches
-browser_click({ selector: "button", index: 0 })
-
-// Or use position fallback (auto-enabled)
-browser_click({ selector: "#btn", positionFallback: true })
-
-// Or manual: get coords then click
-browser_evaluate({ script: `...getBoundingClientRect()...` })
-browser_click({ position: { x: 100, y: 200 } })
+browser_click({ selector: "button", index: 0 })  // Use index
+browser_click({ position: { x: 100, y: 200 } })  // Or coordinates
 ```
 
 ### Cross-origin iframe (Google Sign-In)

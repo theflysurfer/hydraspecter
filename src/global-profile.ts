@@ -226,6 +226,8 @@ export class GlobalProfile {
 
     const launchOptions: any = {
       headless: this.headless,
+      // Enable sandbox to avoid Chrome warning banner
+      chromiumSandbox: true,
       // Anti-detection flags (recommended by Gemini 2025-2026)
       ignoreDefaultArgs: ['--enable-automation'],
       args: [

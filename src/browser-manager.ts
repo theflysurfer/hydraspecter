@@ -404,6 +404,8 @@ export class BrowserManager {
   private getLaunchOptions(config: BrowserConfig): any {
     const launchOptions: any = {
       headless: config.headless ?? true,
+      // Enable sandbox to avoid Chrome warning banner
+      chromiumSandbox: true,
       // Remove automation-revealing default arguments
       ignoreDefaultArgs: ['--enable-automation'],
       // Comprehensive anti-detection flags
