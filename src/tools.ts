@@ -47,7 +47,7 @@ interface DownloadEntry {
   status: 'pending' | 'completed' | 'failed';
   error?: string;
 }
-import { humanClick } from './utils/ghost-cursor.js';
+// humanClick removed - using locator.boundingBox() + humanMove directly for better index support
 import { humanType, humanTypeInElement } from './utils/human-typing.js';
 import { humanScrollDown, humanScrollUp, humanScrollToElement, humanScrollToTop, humanScrollToBottom } from './utils/human-scroll.js';
 import { DetectionMonitor, DetectionResult } from './utils/detection-monitor.js';
@@ -408,12 +408,18 @@ export class BrowserTools {
 • Cookies/localStorage saved automatically
 • Google OAuth works - login once, use everywhere
 • Best anti-detection (headless=false, stealth enabled)
+• Uses REAL Chrome browser (not Chromium) for best session compatibility
+• Auto-syncs sessions from your Chrome profile (cookies, localStorage, IndexedDB)
 • Recommended for 90% of use cases
 
 **Modes:**
 • persistent (default): Session persists between MCP restarts, perfect for authenticated sites
 • incognito: Fresh context each time, no saved data, still uses profile pool for anti-detection
 • isolated: Completely separate browser (Firefox/WebKit, device emulation, multi-account)
+
+**Browser Engine:**
+• persistent/incognito: Uses real Chrome (better session handling, anti-detection)
+• isolated: Uses Chromium (required for Firefox/WebKit, device emulation)
 
 **Examples:**
 • Default (persistent) → browser_create({ url: "https://google.com" })
@@ -1107,11 +1113,15 @@ Use this after clicking a download link. Returns download path and filename.`,
         name: 'browser_click',
         description: `Click on a page element. Use CSS selectors (e.g., "#btn", ".class") or ARIA refs from browser_snapshot (e.g., "aria-ref=e14"). For cross-origin iframes (like Google Sign-In), use position {x, y} to click at absolute coordinates.
 
-⚠️ SELECTOR TIMEOUT? For complex sites (Notion, Google, Shopify):
-1. Use browser_evaluate to find element: \`(() => { const el = [...document.querySelectorAll('button')].find(b => b.textContent.includes('Text')); return el ? el.getBoundingClientRect() : null; })()\`
-2. Then use position: {x: rect.x + rect.width/2, y: rect.y + rect.height/2}
+⚠️ MULTIPLE ELEMENTS? Use 'index' parameter:
+- "strict mode violation: resolved to 2 elements" → Add index: 0 for first element
+- Example: browser_click({ selector: "button:has-text('Enable')", index: 0 })
 
-:has-text() selectors often fail on React/Vue sites. Use browser_evaluate + position instead.`,
+⚠️ SELECTOR TIMEOUT? For complex sites (Notion, Google, Shopify):
+1. Use browser_evaluate to find element coordinates
+2. Then use position: {x, y} to click at those coordinates
+
+:has-text() selectors often fail on React/Vue sites. Use index or position instead.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -1693,7 +1703,38 @@ Reduces tokens by 30-50% for focused queries.`,
 
       switch (name) {
         case 'browser_create': {
-          const mode = args.mode || 'persistent';
+          // Auto-detect session-required sites
+          const sessionRequiredDomains = [
+            'notion.so', 'notion.com',
+            'google.com', 'gmail.com', 'drive.google.com', 'docs.google.com',
+            'github.com', 'gitlab.com',
+            'amazon.com', 'amazon.fr',
+            'facebook.com', 'twitter.com', 'x.com',
+            'linkedin.com',
+            'spotify.com', 'netflix.com',
+            'dropbox.com', 'onedrive.com',
+            'slack.com', 'discord.com'
+          ];
+
+          let mode = args.mode || 'persistent';
+
+          // Override to persistent if URL matches session-required domain
+          if (args.url && mode !== 'isolated') {
+            try {
+              const urlObj = new URL(args.url);
+              const hostname = urlObj.hostname.toLowerCase();
+              const isSessionRequired = sessionRequiredDomains.some(domain =>
+                hostname === domain || hostname.endsWith('.' + domain)
+              );
+
+              if (isSessionRequired && mode === 'incognito') {
+                console.log(`[AUTO] Detected session-required site (${hostname}), using persistent mode instead of incognito`);
+                mode = 'persistent';
+              }
+            } catch {
+              // Invalid URL, keep original mode
+            }
+          }
 
           if (mode === 'isolated') {
             // Isolated mode: use BrowserManager (separate instance)
@@ -2671,13 +2712,46 @@ Reduces tokens by 30-50% for focused queries.`,
         target = pageResult.page.frameLocator(options.frame);
       }
 
+      // Build locator with optional index for multiple elements (strict mode resolution)
+      let locator = target.locator(normalizedSelector);
+      if (typeof options.index === 'number') {
+        locator = locator.nth(options.index);
+      }
+
+      // Check element count and provide helpful error for strict mode violations
+      const elementCount = await locator.count();
+      if (elementCount === 0) {
+        return {
+          success: false,
+          error: `No elements found for selector: ${selector}`,
+          instanceId
+        };
+      }
+
+      if (elementCount > 1 && typeof options.index !== 'number') {
+        return {
+          success: false,
+          error: `Strict mode violation: selector "${selector}" resolved to ${elementCount} elements. Use 'index' parameter (0-${elementCount - 1}) to select one, or make selector more specific.`,
+          instanceId,
+          data: { elementCount, suggestion: 'Add index: 0 for first element, or use a more specific selector' }
+        };
+      }
+
       if (useHumanize && !options.frame) {
         // Use human-like mouse movement with Bezier curves (only on main page, not frames)
-        await humanClick(pageResult.page, normalizedSelector);
+        // Get element bounding box and move to it naturally
+        const boundingBox = await locator.boundingBox();
+        if (boundingBox) {
+          const { humanMove } = await import('./utils/ghost-cursor.js');
+          const targetX = boundingBox.x + boundingBox.width / 2;
+          const targetY = boundingBox.y + boundingBox.height / 2;
+          await humanMove(pageResult.page, { x: targetX, y: targetY });
+        }
+        await locator.click({ force: options.force || false });
         const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.mouse === 'auto';
         return {
           success: true,
-          data: { selector, clicked: true, humanized: true, autoDetected: detectionTriggered, frame: options.frame },
+          data: { selector, clicked: true, humanized: true, autoDetected: detectionTriggered, frame: options.frame, index: options.index },
           instanceId
         };
       }
@@ -2691,16 +2765,10 @@ Reduces tokens by 30-50% for focused queries.`,
       if (options.timeout) clickOptions.timeout = options.timeout;
       if (options.force) clickOptions.force = true;  // Force click even if obscured
 
-      // Build locator with optional index for multiple elements
-      let locator = target.locator(normalizedSelector);
-      if (typeof options.index === 'number') {
-        locator = locator.nth(options.index);
-      }
-
       await locator.click(clickOptions);
       return {
         success: true,
-        data: { selector, clicked: true, frame: options.frame },
+        data: { selector, clicked: true, frame: options.frame, index: options.index },
         instanceId
       };
     } catch (error) {

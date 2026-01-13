@@ -89,10 +89,18 @@ HydraSpecter uses a **profile pool** to support multiple concurrent MCP processe
    - Google OAuth login works across all sites within a profile
    - No manual session management needed
 
-2. **Domain Intelligence**: Auto-learns which sites need protection
+2. **Auto-Sync from Chrome** (NEW): Sessions are automatically synced from your real Chrome browser
+   - On each launch, checks if Chrome has newer session data
+   - Syncs: Cookies (all sites) + Local Storage + IndexedDB (critical domains)
+   - Works even if Chrome is open (partial sync)
+   - Critical domains: google, notion, amazon, temu, github, gitlab, spotify, netflix, dropbox, slack, discord, linkedin
+
+3. **Domain Intelligence**: Auto-learns which sites need protection
    - Detection triggers level increment
    - Levels 0-3 with increasing anti-detection measures
    - Persists to `domain-intelligence.json`
+
+4. **Auto-Detection of Session Sites**: URLs like google.com, notion.so are automatically forced to `persistent` mode
 
 ### Protection Levels
 
@@ -147,6 +155,16 @@ browser_create({ mode: "isolated", browserType: "firefox" })
 | Mobile testing | isolated | Device emulation requires isolated mode |
 | Firefox/WebKit | isolated | Non-Chromium browsers require isolated mode |
 | Multiple Google accounts | isolated | Different account per browser |
+
+### Browser Engine Selection
+
+| Mode | Default Browser | Reason |
+|------|-----------------|--------|
+| `persistent` | **Real Chrome** | Best anti-detection, session compatibility |
+| `incognito` | **Real Chrome** | Same profile pool, anti-detection |
+| `isolated` | **Chromium** | Lighter, faster, no session needed |
+
+To use real Chrome in isolated mode: `browser_create({ mode: "isolated", channel: "chrome" })`
 
 ### Protection & Profile Management
 
@@ -275,6 +293,32 @@ browser_click({
 
 Alternative: Navigate directly to OAuth URL (more reliable for Google Sign-In).
 
+### Handling Multiple Elements (Strict Mode)
+
+When a selector matches multiple elements, use the `index` parameter:
+
+```javascript
+// Error: "strict mode violation: selector resolved to 2 elements"
+browser_click({ instanceId: "...", selector: "button:has-text('Enable')" })
+
+// Solution: Use index to select which element
+browser_click({
+  instanceId: "...",
+  selector: "button:has-text('Enable')",
+  index: 0  // Click the first matching button
+})
+
+// Or index: 1 for second, etc.
+```
+
+The error message now includes helpful info:
+```json
+{
+  "error": "Strict mode violation: selector resolved to 2 elements. Use 'index' parameter (0-1) to select one.",
+  "data": { "elementCount": 2, "suggestion": "Add index: 0 for first element" }
+}
+```
+
 ### Troubleshooting Click Timeouts
 
 **Problem:** `locator.click: Timeout 30000ms exceeded` on React/Vue sites like Notion, Shopify.
@@ -284,7 +328,9 @@ Alternative: Navigate directly to OAuth URL (more reliable for Google Sign-In).
 - Dynamic content loading
 - Text that includes hidden characters
 
-**Solution:** Use `browser_evaluate` to find element coordinates, then click by position:
+**Solution 1:** Use `index` parameter if multiple elements match.
+
+**Solution 2:** Use `browser_evaluate` to find element coordinates, then click by position:
 
 ```javascript
 // Step 1: Find element coordinates

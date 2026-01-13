@@ -408,8 +408,6 @@ export class BrowserManager {
       ignoreDefaultArgs: ['--enable-automation'],
       // Comprehensive anti-detection flags
       args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',  // Critical: hides automation flag
         '--disable-infobars',  // Hides "Chrome is being controlled" banner
         '--disable-dev-shm-usage',  // Improves stability
