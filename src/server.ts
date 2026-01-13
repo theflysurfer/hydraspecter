@@ -2,6 +2,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import {
   CallToolRequestSchema,
+  CompleteRequestSchema,
   ErrorCode,
   ListToolsRequestSchema,
   McpError,
@@ -29,6 +30,7 @@ export class ConcurrentBrowserServer {
       {
         capabilities: {
           tools: {},
+          completions: {},
         },
       }
     );
@@ -94,6 +96,17 @@ export class ConcurrentBrowserServer {
           `Tool execution failed: ${error instanceof Error ? error.message : error}`
         );
       }
+    });
+
+    // Handle completion requests (required for reloaderoo hot-reload)
+    this.server.setRequestHandler(CompleteRequestSchema, async () => {
+      // Return empty completions - we don't provide autocomplete suggestions
+      return {
+        completion: {
+          values: [],
+          hasMore: false,
+        },
+      };
     });
 
     // Handle server shutdown

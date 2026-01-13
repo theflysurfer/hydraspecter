@@ -1874,13 +1874,15 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         name: 'browser_capture_from_network',
         description: `Capture an endpoint directly from network logs and save it as a bookmark.
 
-Use this after observing an interesting API call in browser_get_network_logs. It finds the matching request and saves it automatically.
+**Smart filtering (enabled by default):**
+- Excludes static files (.js, .css, .png, etc.)
+- Excludes CDN domains (media-amazon.com, cloudfront, etc.)
+- Prioritizes POST requests over GET for automation
 
 **Workflow:**
-1. Enable network monitoring on browser_create
+1. Enable network monitoring: browser_create or enable_network
 2. Perform the action (add to cart, search, etc.)
-3. Call browser_get_network_logs to see requests
-4. Call this tool with urlPattern to capture and save the endpoint`,
+3. Call this tool with urlPattern to capture the endpoint`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -1895,6 +1897,14 @@ Use this after observing an interesting API call in browser_get_network_logs. It
             name: {
               type: 'string',
               description: 'Name for the saved endpoint'
+            },
+            methodFilter: {
+              type: 'string',
+              description: 'Filter by HTTP method: "POST", "GET", "PUT", "DELETE". If not set, POST is prioritized.'
+            },
+            excludeStatic: {
+              type: 'boolean',
+              description: 'Exclude static files and CDN domains (default: true)'
             },
             tags: {
               type: 'array',
@@ -2606,15 +2616,57 @@ Use this after observing an interesting API call in browser_get_network_logs. It
             break;
           }
 
-          // Find matching request
+          // Static file extensions to exclude by default
+          const STATIC_EXTENSIONS = /\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|map|webp|avif)(\?|$)/i;
+
+          // CDN/static domains to exclude by default
+          const CDN_DOMAINS = /^(media-amazon|images-amazon|cloudfront|cdn\.|static\.|assets\.)/i;
+
+          // Filter logs: exclude static files and CDN domains unless explicitly disabled
+          const excludeStatic = args.excludeStatic !== false; // default true
+          const methodFilter = args.methodFilter?.toUpperCase(); // optional: 'POST', 'GET', etc.
+
+          let filteredLogs = logs.filter(entry => {
+            // Apply method filter if specified
+            if (methodFilter && entry.method !== methodFilter) return false;
+
+            // Apply static filter unless disabled
+            if (excludeStatic) {
+              if (STATIC_EXTENSIONS.test(entry.url)) return false;
+              try {
+                const hostname = new URL(entry.url).hostname;
+                if (CDN_DOMAINS.test(hostname)) return false;
+              } catch { /* ignore parse errors */ }
+            }
+
+            return true;
+          });
+
+          // Find matching request with pattern
           const pattern = new RegExp(args.urlPattern, 'i');
-          const matchedEntry = logs.find(entry => pattern.test(entry.url));
+          let matchedEntry = filteredLogs.find(entry => pattern.test(entry.url));
+
+          // If no match and no method filter, try POST first (more useful for automation)
+          if (!matchedEntry && !methodFilter) {
+            const postLogs = filteredLogs.filter(e => e.method === 'POST');
+            matchedEntry = postLogs.find(entry => pattern.test(entry.url));
+
+            // Fall back to any method
+            if (!matchedEntry) {
+              matchedEntry = filteredLogs.find(entry => pattern.test(entry.url));
+            }
+          }
 
           if (!matchedEntry) {
+            // Show available API-like URLs for debugging
+            const apiUrls = filteredLogs.slice(0, 15).map(e => `${e.method} ${e.url.substring(0, 100)}`);
             result = {
               success: false,
               error: `No request found matching pattern: ${args.urlPattern}`,
-              data: { availableUrls: logs.slice(0, 10).map(e => e.url) }
+              data: {
+                hint: 'Use methodFilter:"POST" to target POST requests specifically',
+                availableUrls: apiUrls
+              }
             };
             break;
           }
