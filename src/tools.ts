@@ -55,6 +55,7 @@ import { RateLimiter } from './utils/rate-limiter.js';
 import { resilientClick, DEFAULT_RESILIENCE, type ResilienceOptions } from './utils/click-resilience.js';
 import { getGlobalProfile, GlobalProfile, AllProfilesInUseError } from './global-profile.js';
 import { getDomainIntelligence, DomainIntelligence } from './domain-intelligence.js';
+import { getApiBookmarks } from './api-bookmarks.js';
 
 /**
  * Transform jQuery-style selectors to Playwright-compatible selectors.
@@ -1709,6 +1710,214 @@ Reduces tokens by 30-50% for focused queries.`,
           },
           required: ['completedSteps', 'totalSteps', 'allSuccessful']
         }
+      },
+
+      // API Bookmarks tools - LLM memory for endpoints
+      {
+        name: 'browser_save_endpoint',
+        description: `Save an API endpoint discovered during navigation for later reuse.
+
+Use this to bookmark important endpoints (add to cart, login, search, etc.) so you can reuse them in future scraping sessions without re-discovering them.
+
+**When to use:**
+- You discovered an API call that will be useful later
+- Repetitive actions on a site (cart, checkout, forms)
+- Important endpoints you don't want to search for again
+
+**Security:** Sensitive headers (Authorization, Cookie, API keys) are automatically removed.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            domain: {
+              type: 'string',
+              description: 'Domain for this endpoint (e.g., "amazon.com"). If omitted, extracted from URL.'
+            },
+            name: {
+              type: 'string',
+              description: 'Descriptive name for the endpoint (e.g., "Add to cart", "Search products")'
+            },
+            endpoint: {
+              type: 'object',
+              properties: {
+                method: { type: 'string', description: 'HTTP method (GET, POST, PUT, DELETE)' },
+                url: { type: 'string', description: 'Full URL or path (e.g., "/api/cart/add")' },
+                headers: { type: 'object', description: 'Important headers (auth headers auto-removed)' },
+                queryParams: { type: 'object', description: 'Query parameters as key-value pairs' },
+                bodyTemplate: { type: 'string', description: 'Body template with {{placeholders}} for variables' }
+              },
+              required: ['method', 'url']
+            },
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tags for categorization (e.g., ["cart", "critical"])'
+            },
+            notes: {
+              type: 'string',
+              description: 'Notes about usage, requirements, or quirks'
+            }
+          },
+          required: ['name', 'endpoint']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            saved: { type: 'boolean' },
+            id: { type: 'string', description: 'Unique ID for the endpoint (domain/slug)' },
+            domain: { type: 'string' },
+            created: { type: 'boolean', description: 'True if new, false if updated existing' },
+            totalEndpoints: { type: 'number' }
+          }
+        }
+      },
+      {
+        name: 'browser_list_endpoints',
+        description: `List saved API endpoints. Filter by domain, tags, or search text.
+
+Use this to recall endpoints you've previously saved for a domain before starting scraping work.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            domain: {
+              type: 'string',
+              description: 'Filter by domain (e.g., "amazon.com")'
+            },
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Filter by tags (e.g., ["cart", "checkout"])'
+            },
+            search: {
+              type: 'string',
+              description: 'Search in name, path, notes, and tags'
+            }
+          }
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            endpoints: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string' },
+                  domain: { type: 'string' },
+                  name: { type: 'string' },
+                  method: { type: 'string' },
+                  path: { type: 'string' },
+                  tags: { type: 'array', items: { type: 'string' } },
+                  usageCount: { type: 'number' },
+                  lastUsed: { type: 'string' }
+                }
+              }
+            },
+            totalCount: { type: 'number' }
+          }
+        }
+      },
+      {
+        name: 'browser_get_endpoint',
+        description: `Get full details of a saved endpoint by ID. Also increments usage count.
+
+Use this to retrieve the complete endpoint data (URL, headers, body template) when you're ready to use it.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Endpoint ID in format "domain/slug" (e.g., "amazon.com/add-to-cart")'
+            }
+          },
+          required: ['id']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            method: { type: 'string' },
+            path: { type: 'string' },
+            fullUrl: { type: 'string' },
+            headers: { type: 'object' },
+            queryParams: { type: 'object' },
+            bodyTemplate: { type: 'string' },
+            tags: { type: 'array', items: { type: 'string' } },
+            notes: { type: 'string' },
+            usageCount: { type: 'number' },
+            lastUsed: { type: 'string' },
+            createdAt: { type: 'string' }
+          }
+        }
+      },
+      {
+        name: 'browser_delete_endpoint',
+        description: 'Delete a saved endpoint by ID.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Endpoint ID to delete (e.g., "amazon.com/add-to-cart")'
+            }
+          },
+          required: ['id']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            deleted: { type: 'boolean' },
+            id: { type: 'string' }
+          }
+        }
+      },
+      {
+        name: 'browser_capture_from_network',
+        description: `Capture an endpoint directly from network logs and save it as a bookmark.
+
+Use this after observing an interesting API call in browser_get_network_logs. It finds the matching request and saves it automatically.
+
+**Workflow:**
+1. Enable network monitoring on browser_create
+2. Perform the action (add to cart, search, etc.)
+3. Call browser_get_network_logs to see requests
+4. Call this tool with urlPattern to capture and save the endpoint`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Browser instance ID'
+            },
+            urlPattern: {
+              type: 'string',
+              description: 'Regex pattern to match the request URL (e.g., "cart", "api/search")'
+            },
+            name: {
+              type: 'string',
+              description: 'Name for the saved endpoint'
+            },
+            tags: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Tags for the endpoint'
+            },
+            notes: {
+              type: 'string',
+              description: 'Notes about the endpoint'
+            }
+          },
+          required: ['instanceId', 'urlPattern', 'name']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            captured: { type: 'boolean' },
+            id: { type: 'string' },
+            matchedUrl: { type: 'string' },
+            method: { type: 'string' },
+            domain: { type: 'string' }
+          }
+        }
       }
     ];
   }
@@ -2291,6 +2500,156 @@ Reduces tokens by 30-50% for focused queries.`,
             returnOnlyFinal: args.returnOnlyFinal ?? false
           });
           break;
+
+        // API Bookmarks handlers
+        case 'browser_save_endpoint': {
+          const bookmarks = getApiBookmarks();
+          const endpoint = args.endpoint as { method: string; url: string; headers?: Record<string, string>; queryParams?: Record<string, string>; bodyTemplate?: string };
+
+          // Extract domain from URL if not provided
+          let domain = args.domain;
+          if (!domain && endpoint.url) {
+            domain = bookmarks.getRootDomain(endpoint.url);
+          }
+          if (!domain) {
+            result = { success: false, error: 'Could not determine domain. Provide domain parameter or use a full URL.' };
+            break;
+          }
+
+          const { id, created } = bookmarks.addEndpoint(
+            domain,
+            args.name,
+            endpoint,
+            { tags: args.tags, notes: args.notes }
+          );
+
+          result = {
+            success: true,
+            data: {
+              saved: true,
+              id,
+              domain: bookmarks.getRootDomain(domain),
+              created,
+              totalEndpoints: bookmarks.getTotalCount()
+            }
+          };
+          break;
+        }
+
+        case 'browser_list_endpoints': {
+          const bookmarks = getApiBookmarks();
+          const endpoints = bookmarks.listEndpoints({
+            domain: args.domain,
+            tags: args.tags,
+            search: args.search
+          });
+
+          const endpointList = endpoints.map(e => ({
+            id: e.id,
+            domain: e.domain,
+            name: e.endpoint.name,
+            method: e.endpoint.method,
+            path: e.endpoint.path,
+            tags: e.endpoint.tags,
+            usageCount: e.endpoint.usageCount,
+            lastUsed: e.endpoint.lastUsed
+          }));
+
+          // Use TOON format for large lists
+          const formatted = smartFormat({ endpoints: endpointList, totalCount: endpoints.length });
+          result = {
+            success: true,
+            data: formatted.format === 'toon'
+              ? { ...formatted, endpoints: endpointList, totalCount: endpoints.length }
+              : { endpoints: endpointList, totalCount: endpoints.length }
+          };
+          break;
+        }
+
+        case 'browser_get_endpoint': {
+          const bookmarks = getApiBookmarks();
+          const endpoint = bookmarks.getEndpoint(args.id);
+
+          if (!endpoint) {
+            result = { success: false, error: `Endpoint not found: ${args.id}` };
+            break;
+          }
+
+          result = {
+            success: true,
+            data: endpoint
+          };
+          break;
+        }
+
+        case 'browser_delete_endpoint': {
+          const bookmarks = getApiBookmarks();
+          const deleted = bookmarks.deleteEndpoint(args.id);
+
+          result = {
+            success: true,
+            data: { deleted, id: args.id }
+          };
+          break;
+        }
+
+        case 'browser_capture_from_network': {
+          const bookmarks = getApiBookmarks();
+
+          // Get network logs for the instance
+          const logs = this.networkLogs.get(args.instanceId);
+          if (!logs || logs.length === 0) {
+            result = {
+              success: false,
+              error: 'No network logs found. Enable network monitoring with browser_create({ enableNetworkMonitoring: true }) first.'
+            };
+            break;
+          }
+
+          // Find matching request
+          const pattern = new RegExp(args.urlPattern, 'i');
+          const matchedEntry = logs.find(entry => pattern.test(entry.url));
+
+          if (!matchedEntry) {
+            result = {
+              success: false,
+              error: `No request found matching pattern: ${args.urlPattern}`,
+              data: { availableUrls: logs.slice(0, 10).map(e => e.url) }
+            };
+            break;
+          }
+
+          // Extract domain from matched URL
+          const domain = bookmarks.getRootDomain(matchedEntry.url);
+
+          // Build endpoint from network entry
+          const endpoint = {
+            method: matchedEntry.method,
+            url: matchedEntry.url,
+            headers: matchedEntry.requestHeaders ? bookmarks.sanitizeHeaders(matchedEntry.requestHeaders) : undefined,
+            bodyTemplate: matchedEntry.postData
+          };
+
+          const { id, created } = bookmarks.addEndpoint(
+            domain,
+            args.name,
+            endpoint,
+            { tags: args.tags, notes: args.notes }
+          );
+
+          result = {
+            success: true,
+            data: {
+              captured: true,
+              id,
+              matchedUrl: matchedEntry.url,
+              method: matchedEntry.method,
+              domain,
+              created
+            }
+          };
+          break;
+        }
 
         default:
           result = {

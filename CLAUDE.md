@@ -24,6 +24,7 @@ Multi-headed browser automation MCP server with stealth capabilities, concurrent
 | **Expectation Filtering** | Filter snapshots by intent (30-50% token reduction) |
 | **Auto TOON Format** | Large lists auto-formatted for 40-60% fewer tokens |
 | **Click Resilience** | Auto-recovery from visibility, overlay, timeout errors |
+| **API Bookmarks** | LLM memory for saving/recalling API endpoints |
 
 ## Architecture
 
@@ -34,6 +35,7 @@ src/
 ├── browser-manager.ts    # Instance lifecycle
 ├── global-profile.ts     # Zero-config persistent Chrome profile
 ├── domain-intelligence.ts # Auto-learning protection levels
+├── api-bookmarks.ts      # LLM memory for API endpoints
 ├── tools.ts              # MCP tool definitions
 ├── types.ts              # TypeScript types
 └── utils/
@@ -59,7 +61,8 @@ src/
 │   └── pool-4/                 # Profile 4
 ├── locks/                      # Lock files for profile management
 │   └── pool-X.lock             # { pid, startedAt, mcpId }
-└── domain-intelligence.json    # Protection levels per domain (shared)
+├── domain-intelligence.json    # Protection levels per domain (shared)
+└── api-bookmarks.json          # Saved API endpoints (shared)
 ```
 
 ## Multi-Process Support
@@ -243,6 +246,58 @@ browser_enable_network_monitoring({ instanceId: "..." })
 browser_get_console_logs({ instanceId: "...", filter: "error" })
 browser_get_network_logs({ instanceId: "...", filter: "xhr" })
 ```
+
+### API Bookmarks (LLM Memory for Endpoints)
+
+Save discovered API endpoints for later reuse in scraping tasks. The LLM can bookmark important endpoints (add to cart, search, login) and recall them without re-discovering.
+
+| Tool | Description |
+|------|-------------|
+| `browser_save_endpoint` | Save an API endpoint with name, method, URL, headers, body template |
+| `browser_list_endpoints` | List saved endpoints (filter by domain, tags, search) |
+| `browser_get_endpoint` | Get full endpoint details for reuse |
+| `browser_delete_endpoint` | Delete an endpoint |
+| `browser_capture_from_network` | Capture endpoint directly from network logs |
+
+**Workflow:**
+```javascript
+// 1. Enable network monitoring
+browser_create({ url: "https://amazon.com", enableNetworkMonitoring: true })
+
+// 2. Perform action (e.g., add to cart)
+browser_click({ instanceId: "...", selector: "#add-to-cart" })
+
+// 3. See what API calls were made
+browser_get_network_logs({ instanceId: "...", filter: "xhr" })
+
+// 4. Capture interesting endpoint
+browser_capture_from_network({
+  instanceId: "...",
+  urlPattern: "cart",
+  name: "Add to cart",
+  tags: ["cart", "critical"]
+})
+
+// 5. Later, recall saved endpoints
+browser_list_endpoints({ domain: "amazon.com" })
+browser_get_endpoint({ id: "amazon.com/add-to-cart" })
+```
+
+**Or save manually:**
+```javascript
+browser_save_endpoint({
+  name: "Search products",
+  endpoint: {
+    method: "GET",
+    url: "https://amazon.com/s",
+    queryParams: { "k": "{{query}}" }
+  },
+  tags: ["search"],
+  notes: "Main search endpoint. Use 'k' param for keywords."
+})
+```
+
+**Security:** Sensitive headers (Authorization, Cookie, API keys) are automatically removed when saving.
 
 ### PDF Generation & Downloads
 
