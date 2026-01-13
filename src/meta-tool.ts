@@ -68,6 +68,16 @@ const ACTION_MAP: Record<string, string> = {
   'network': 'browser_get_network_logs',
   'enable_network': 'browser_enable_network_monitoring',
   'downloads': 'browser_get_downloads',
+
+  // API Bookmarks (LLM memory for endpoints)
+  'save_endpoint': 'browser_save_endpoint',
+  'bookmark': 'browser_save_endpoint',
+  'list_endpoints': 'browser_list_endpoints',
+  'bookmarks': 'browser_list_endpoints',
+  'get_endpoint': 'browser_get_endpoint',
+  'delete_endpoint': 'browser_delete_endpoint',
+  'capture_endpoint': 'browser_capture_from_network',
+  'capture': 'browser_capture_from_network',
 };
 
 // Actions grouped by category for help (used in tool description)
