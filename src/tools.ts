@@ -52,6 +52,7 @@ import { humanType, humanTypeInElement } from './utils/human-typing.js';
 import { humanScrollDown, humanScrollUp, humanScrollToElement, humanScrollToTop, humanScrollToBottom } from './utils/human-scroll.js';
 import { DetectionMonitor, DetectionResult } from './utils/detection-monitor.js';
 import { RateLimiter } from './utils/rate-limiter.js';
+import { resilientClick, DEFAULT_RESILIENCE, type ResilienceOptions } from './utils/click-resilience.js';
 import { getGlobalProfile, GlobalProfile, AllProfilesInUseError } from './global-profile.js';
 import { getDomainIntelligence, DomainIntelligence } from './domain-intelligence.js';
 
@@ -1111,17 +1112,17 @@ Use this after clicking a download link. Returns download path and filename.`,
       // Page interaction tools
       {
         name: 'browser_click',
-        description: `Click on a page element. Use CSS selectors (e.g., "#btn", ".class") or ARIA refs from browser_snapshot (e.g., "aria-ref=e14"). For cross-origin iframes (like Google Sign-In), use position {x, y} to click at absolute coordinates.
+        description: `Click on a page element with **automatic resilience**. Auto-recovers from common failures:
+• Element not visible → auto-scroll into view
+• Overlay blocks click → auto-retry with force, dismiss overlays
+• Selector timeout → fallback to position-based click
+
+Use CSS selectors (e.g., "#btn", ".class") or ARIA refs from browser_snapshot (e.g., "aria-ref=e14"). For cross-origin iframes (like Google Sign-In), use position {x, y} to click at absolute coordinates.
 
 ⚠️ MULTIPLE ELEMENTS? Use 'index' parameter:
 - "strict mode violation: resolved to 2 elements" → Add index: 0 for first element
-- Example: browser_click({ selector: "button:has-text('Enable')", index: 0 })
 
-⚠️ SELECTOR TIMEOUT? For complex sites (Notion, Google, Shopify):
-1. Use browser_evaluate to find element coordinates
-2. Then use position: {x, y} to click at those coordinates
-
-:has-text() selectors often fail on React/Vue sites. Use index or position instead.`,
+Resilience is enabled by default (maxRetries: 3). Set maxRetries: 0 to disable.`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -1181,6 +1182,37 @@ Use this after clicking a download link. Returns download path and filename.`,
               type: 'boolean',
               description: 'Force click even if another element obscures the target. Use when "pointer events intercepted" error occurs.',
               default: false
+            },
+            // Resilience options
+            autoScroll: {
+              type: 'boolean',
+              description: 'Auto-scroll to element if not visible (default: true)',
+              default: true
+            },
+            autoForce: {
+              type: 'boolean',
+              description: 'Auto-retry with force:true on overlay interception errors (default: true)',
+              default: true
+            },
+            positionFallback: {
+              type: 'boolean',
+              description: 'Fall back to position-based click on selector timeout (default: true)',
+              default: true
+            },
+            maxRetries: {
+              type: 'number',
+              description: 'Max retry attempts for recoverable errors (default: 3). Set to 0 to disable resilience.',
+              default: 3
+            },
+            retryDelay: {
+              type: 'number',
+              description: 'Base delay between retries in ms (default: 500)',
+              default: 500
+            },
+            dismissOverlays: {
+              type: 'boolean',
+              description: 'Try to dismiss known overlays (cookie consent, modals, Gemini panel) blocking the click (default: true)',
+              default: true
             }
           },
           required: ['instanceId']
@@ -1191,9 +1223,16 @@ Use this after clicking a download link. Returns download path and filename.`,
             selector: { type: 'string' },
             clicked: { type: 'boolean' },
             humanized: { type: 'boolean' },
-            autoDetected: { type: 'boolean' }
+            autoDetected: { type: 'boolean' },
+            attempts: { type: 'number', description: 'Number of click attempts made' },
+            recoveryApplied: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Recovery strategies applied (e.g., "scroll", "force", "dismiss_overlay", "position_fallback")'
+            },
+            fallbackUsed: { type: 'boolean', description: 'True if position fallback was used' }
           },
-          required: ['selector', 'clicked']
+          required: ['clicked']
         }
       },
       {
@@ -2671,13 +2710,12 @@ Reduces tokens by 30-50% for focused queries.`,
 
     try {
       // Click at absolute coordinates (useful for cross-origin iframes like Google Sign-In)
+      // Position-based clicks don't need resilience - they're direct mouse clicks
       if (options.position) {
         const { x, y } = options.position;
-        // Use human-like movement if enabled
         const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'mouse', options.humanize);
 
         if (useHumanize) {
-          // Import and use bezier curve movement to coordinates
           const { humanMove } = await import('./utils/ghost-cursor.js');
           await humanMove(pageResult.page, { x, y });
         }
@@ -2706,14 +2744,30 @@ Reduces tokens by 30-50% for focused queries.`,
       // Check if humanize should be enabled (supports "auto" mode with detection)
       const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'mouse', options.humanize);
 
-      // Get the target - either page or frame
-      let target: any = pageResult.page;
+      // Frame-based clicks - use simple click without resilience (frame contexts are complex)
       if (options.frame) {
-        target = pageResult.page.frameLocator(options.frame);
+        const frameLocator = pageResult.page.frameLocator(options.frame);
+        let locator = frameLocator.locator(normalizedSelector);
+        if (typeof options.index === 'number') {
+          locator = locator.nth(options.index);
+        }
+
+        const clickOptions: any = { button: options.button };
+        if (options.clickCount) clickOptions.clickCount = options.clickCount;
+        if (options.delay) clickOptions.delay = options.delay;
+        if (options.timeout) clickOptions.timeout = options.timeout;
+        if (options.force) clickOptions.force = true;
+
+        await locator.click(clickOptions);
+        return {
+          success: true,
+          data: { selector, clicked: true, frame: options.frame, index: options.index },
+          instanceId
+        };
       }
 
-      // Build locator with optional index for multiple elements (strict mode resolution)
-      let locator = target.locator(normalizedSelector);
+      // Build locator with optional index for multiple elements
+      let locator = pageResult.page.locator(normalizedSelector);
       if (typeof options.index === 'number') {
         locator = locator.nth(options.index);
       }
@@ -2721,10 +2775,41 @@ Reduces tokens by 30-50% for focused queries.`,
       // Check element count and provide helpful error for strict mode violations
       const elementCount = await locator.count();
       if (elementCount === 0) {
+        // Try position fallback before giving up (Playwright :has-text() often fails on SPAs)
+        const shouldTryFallback = options.positionFallback ?? DEFAULT_RESILIENCE.positionFallback;
+        if (shouldTryFallback) {
+          const { getPositionFallback } = await import('./utils/click-resilience.js');
+          const pos = await getPositionFallback(pageResult.page, selector);
+          if (pos) {
+            const useHumanizeForFallback = await this.shouldHumanizeAsync(pageResult.page, 'mouse', options.humanize);
+            if (useHumanizeForFallback) {
+              const { humanMove } = await import('./utils/ghost-cursor.js');
+              await humanMove(pageResult.page, pos);
+            }
+            await pageResult.page.mouse.click(pos.x, pos.y, {
+              button: options.button || 'left',
+              clickCount: options.clickCount || 1,
+              delay: options.delay || 0
+            });
+            return {
+              success: true,
+              data: {
+                selector,
+                clicked: true,
+                position: pos,
+                fallbackUsed: true,
+                humanized: useHumanizeForFallback,
+                recoveryApplied: ['position_fallback']
+              },
+              instanceId
+            };
+          }
+        }
         return {
           success: false,
           error: `No elements found for selector: ${selector}`,
-          instanceId
+          instanceId,
+          data: { suggestion: 'Use browser_snapshot to verify element exists, or browser_evaluate to find by textContent' }
         };
       }
 
@@ -2737,39 +2822,110 @@ Reduces tokens by 30-50% for focused queries.`,
         };
       }
 
-      if (useHumanize && !options.frame) {
-        // Use human-like mouse movement with Bezier curves (only on main page, not frames)
-        // Get element bounding box and move to it naturally
-        const boundingBox = await locator.boundingBox();
-        if (boundingBox) {
-          const { humanMove } = await import('./utils/ghost-cursor.js');
-          const targetX = boundingBox.x + boundingBox.width / 2;
-          const targetY = boundingBox.y + boundingBox.height / 2;
-          await humanMove(pageResult.page, { x: targetX, y: targetY });
+      // Build resilience options with defaults
+      const resilienceOptions: ResilienceOptions = {
+        autoScroll: options.autoScroll ?? DEFAULT_RESILIENCE.autoScroll,
+        autoForce: options.autoForce ?? DEFAULT_RESILIENCE.autoForce,
+        positionFallback: options.positionFallback ?? DEFAULT_RESILIENCE.positionFallback,
+        maxRetries: options.maxRetries ?? DEFAULT_RESILIENCE.maxRetries,
+        retryDelay: options.retryDelay ?? DEFAULT_RESILIENCE.retryDelay,
+        dismissOverlays: options.dismissOverlays ?? DEFAULT_RESILIENCE.dismissOverlays,
+        timeout: options.timeout || DEFAULT_RESILIENCE.timeout
+      };
+
+      // If maxRetries is 0, skip resilience entirely (backward compatibility mode)
+      if (resilienceOptions.maxRetries === 0) {
+        // Human-like click
+        if (useHumanize) {
+          const boundingBox = await locator.boundingBox();
+          if (boundingBox) {
+            const { humanMove } = await import('./utils/ghost-cursor.js');
+            const targetX = boundingBox.x + boundingBox.width / 2;
+            const targetY = boundingBox.y + boundingBox.height / 2;
+            await humanMove(pageResult.page, { x: targetX, y: targetY });
+          }
+          await locator.click({ force: options.force || false });
+          return {
+            success: true,
+            data: { selector, clicked: true, humanized: true, autoDetected: options.humanize === 'auto', index: options.index },
+            instanceId
+          };
         }
-        await locator.click({ force: options.force || false });
-        const detectionTriggered = options.humanize === 'auto' || this.humanizeConfig.mouse === 'auto';
+
+        // Standard click
+        const clickOptions: any = { button: options.button };
+        if (options.clickCount) clickOptions.clickCount = options.clickCount;
+        if (options.delay) clickOptions.delay = options.delay;
+        if (options.timeout) clickOptions.timeout = options.timeout;
+        if (options.force) clickOptions.force = true;
+
+        await locator.click(clickOptions);
         return {
           success: true,
-          data: { selector, clicked: true, humanized: true, autoDetected: detectionTriggered, frame: options.frame, index: options.index },
+          data: { selector, clicked: true, index: options.index },
           instanceId
         };
       }
 
-      // Standard click (works on both page and frameLocator)
-      const clickOptions: any = {
-        button: options.button
-      };
-      if (options.clickCount) clickOptions.clickCount = options.clickCount;
-      if (options.delay) clickOptions.delay = options.delay;
-      if (options.timeout) clickOptions.timeout = options.timeout;
-      if (options.force) clickOptions.force = true;  // Force click even if obscured
+      // Human-like movement before resilient click
+      if (useHumanize) {
+        try {
+          const boundingBox = await locator.boundingBox();
+          if (boundingBox) {
+            const { humanMove } = await import('./utils/ghost-cursor.js');
+            const targetX = boundingBox.x + boundingBox.width / 2;
+            const targetY = boundingBox.y + boundingBox.height / 2;
+            await humanMove(pageResult.page, { x: targetX, y: targetY });
+          }
+        } catch {
+          // Element might not be visible yet, resilientClick will handle it
+        }
+      }
 
-      await locator.click(clickOptions);
+      // Use resilient click with automatic recovery
+      const result = await resilientClick(
+        pageResult.page,
+        locator,
+        selector,
+        {
+          force: options.force,
+          button: options.button,
+          clickCount: options.clickCount,
+          delay: options.delay,
+          timeout: options.timeout
+        },
+        resilienceOptions
+      );
+
+      if (result.success) {
+        return {
+          success: true,
+          data: {
+            selector,
+            clicked: true,
+            humanized: useHumanize,
+            autoDetected: options.humanize === 'auto',
+            index: options.index,
+            attempts: result.attempts.length,
+            recoveryApplied: result.recoveryApplied.length > 0 ? result.recoveryApplied : undefined,
+            fallbackUsed: result.recoveryApplied.includes('position_fallback'),
+            ...result.data
+          },
+          instanceId
+        };
+      }
+
+      // Return failure with diagnostic info
       return {
-        success: true,
-        data: { selector, clicked: true, frame: options.frame, index: options.index },
-        instanceId
+        success: false,
+        error: result.error,
+        instanceId,
+        data: {
+          selector,
+          attempts: result.attempts,
+          recoveryApplied: result.recoveryApplied,
+          suggestion: result.suggestion
+        }
       };
     } catch (error) {
       return {

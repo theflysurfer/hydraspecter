@@ -107,6 +107,14 @@ export interface ClickOptions {
   position?: { x: number; y: number };  // Click at absolute coordinates (for cross-origin iframes)
   index?: number;  // Select nth matching element (0-based) when multiple elements match
   force?: boolean;  // Force click even if element is obscured by another element
+
+  // Resilience options (auto-recovery for common click failures)
+  autoScroll?: boolean;       // Auto-scroll to element if not visible (default: true)
+  autoForce?: boolean;        // Auto-retry with force:true on overlay errors (default: true)
+  positionFallback?: boolean; // Fall back to position-based click on timeout (default: true)
+  maxRetries?: number;        // Max retry attempts (default: 3)
+  retryDelay?: number;        // Base delay between retries in ms (default: 500)
+  dismissOverlays?: boolean;  // Try to dismiss known overlay patterns (default: true)
 }
 
 export interface TypeOptions {

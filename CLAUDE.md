@@ -23,6 +23,7 @@ Multi-headed browser automation MCP server with stealth capabilities, concurrent
 | ARIA Snapshots | Token-efficient page representation |
 | **Expectation Filtering** | Filter snapshots by intent (30-50% token reduction) |
 | **Auto TOON Format** | Large lists auto-formatted for 40-60% fewer tokens |
+| **Click Resilience** | Auto-recovery from visibility, overlay, timeout errors |
 
 ## Architecture
 
@@ -36,6 +37,7 @@ src/
 ├── tools.ts              # MCP tool definitions
 ├── types.ts              # TypeScript types
 └── utils/
+    ├── click-resilience.ts  # Auto-recovery for click failures
     ├── ghost-cursor.ts      # Bezier mouse movements
     ├── human-typing.ts      # Natural typing patterns
     ├── human-scroll.ts      # Physics-based scrolling
@@ -192,7 +194,7 @@ These mistakes are now **impossible** with the unified `browser_create`:
 | Tool | Description |
 |------|-------------|
 | `browser_navigate` | Navigate with detection feedback |
-| `browser_click` | Click (humanize: true/false/auto) |
+| `browser_click` | Click with **auto-resilience** (scroll, force, position fallback) |
 | `browser_type` | Type text (humanize: true/false/auto) |
 | `browser_fill` | Fill form field (humanize: true/false/auto) |
 | `browser_scroll` | Scroll (humanize: true/false/auto) |
@@ -357,6 +359,65 @@ browser_click({
 ```javascript
 browser_click({ instanceId: "...", selector: "aria-ref=e14" })
 ```
+
+### Click Resilience (Auto-Recovery)
+
+`browser_click` now includes **automatic resilience** - it recovers from common failures without manual intervention.
+
+| Error Type | Auto-Recovery |
+|------------|---------------|
+| Element not visible | Auto-scroll into view + retry |
+| Overlay intercepts | Force click, then dismiss overlays |
+| Selector timeout | Fallback to position-based click |
+| Rate limiting | Exponential backoff |
+
+**Resilience Options:**
+
+```javascript
+browser_click({
+  instanceId: "...",
+  selector: "button:has-text('Submit')",
+  // Resilience options (all enabled by default)
+  autoScroll: true,       // Scroll to element if not visible
+  autoForce: true,        // Retry with force:true on overlay errors
+  positionFallback: true, // Fall back to coordinate-based click
+  maxRetries: 3,          // Max retry attempts (0 disables resilience)
+  retryDelay: 500,        // Base delay between retries (ms)
+  dismissOverlays: true   // Try to close cookie/modal overlays
+})
+```
+
+**Response includes recovery info:**
+
+```json
+{
+  "success": true,
+  "data": {
+    "clicked": true,
+    "attempts": 2,
+    "recoveryApplied": ["scroll", "force"]
+  }
+}
+```
+
+**Failure response with diagnostics:**
+
+```json
+{
+  "success": false,
+  "error": "Click failed after 3 attempts",
+  "data": {
+    "attempts": [
+      { "attempt": 1, "strategy": "standard", "error": "not visible" },
+      { "attempt": 2, "strategy": "visibility", "error": "overlay intercepts" },
+      { "attempt": 3, "strategy": "overlay", "error": "still blocked" }
+    ],
+    "suggestion": "Use browser_evaluate to find element coords"
+  }
+}
+```
+
+**Disable resilience:** Set `maxRetries: 0` for legacy behavior (single attempt).
 
 ## Token Optimization
 
