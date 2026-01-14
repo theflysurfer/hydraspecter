@@ -122,9 +122,11 @@ export class MetaTool {
 • Endpoints: capture, list_endpoints, save_endpoint, get_endpoint
 • Advanced: evaluate, batch, protection
 
-**Auth-Required Sites:**
-Use { action: "switch_auth" } before accessing Notion, Gmail, Google Calendar, Slack, etc.
-This switches to pool-0 which has your Chrome sessions synced.
+**Auth-Required Sites (Notion, Gmail, etc.):**
+Sessions persist across all pools. Just use direct workspace URLs:
+• ✅ { action: "create", target: "https://notion.so/[page-id]" }
+• ❌ Don't use "https://notion.so" alone (redirects to marketing page)
+• ❌ Don't invent params like options: { pool: "pool-1" }
 
 **Common Parameters:**
 • action (required): What to do
