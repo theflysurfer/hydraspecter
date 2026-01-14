@@ -104,6 +104,11 @@ Some domains are USELESS without login. The system auto-detects these and warns 
 ### If not logged in:
 Login manually once in the HydraSpecter browser - session will persist in that pool.
 
+### Copy session between pools:
+```powershell
+Copy-Item -Path "$env:USERPROFILE\.hydraspecter\profiles\pool-1\*" -Destination "$env:USERPROFILE\.hydraspecter\profiles\pool-0\" -Recurse -Force
+```
+
 ### Common mistakes:
 - ❌ `browser({ action: "create", target: "https://notion.so" })` → Redirects to marketing page
 - ✅ `browser({ action: "create", target: "https://notion.so/[page-id]" })` → Direct to workspace
