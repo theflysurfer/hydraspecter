@@ -20,7 +20,7 @@ export interface ProfileStatus {
 
 /** Default pool configuration */
 const DEFAULT_BASE_DIR = path.join(os.homedir(), '.hydraspecter');
-const DEFAULT_POOL_SIZE = 5;
+const DEFAULT_POOL_SIZE = 10;
 
 /**
  * Manages a pool of browser profiles for multi-process support.

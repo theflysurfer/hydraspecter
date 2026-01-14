@@ -12,6 +12,7 @@ import { BrowserManager } from './browser-manager.js';
 import { BrowserTools } from './tools.js';
 import { MetaTool } from './meta-tool.js';
 import { ServerConfig } from './types.js';
+import { syncAllProfilesFromChrome } from './global-profile.js';
 
 export class ConcurrentBrowserServer {
   private server: Server;
@@ -124,9 +125,12 @@ export class ConcurrentBrowserServer {
   }
 
   async run() {
+    // Sync Chrome sessions to all pools at startup
+    await syncAllProfilesFromChrome();
+
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('HydraSpecter MCP Server started [HOT RELOAD TEST]');
+    console.error('HydraSpecter MCP Server started');
   }
 
   async shutdown() {

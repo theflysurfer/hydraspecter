@@ -154,6 +154,38 @@ async function syncSessionDataFromChrome(targetProfileDir: string): Promise<bool
   }
 }
 
+/**
+ * Sync Chrome sessions to ALL pools at startup.
+ * This ensures all pools have auth sessions available.
+ */
+export async function syncAllProfilesFromChrome(): Promise<{ synced: number; failed: number }> {
+  const baseDir = path.join(os.homedir(), '.hydraspecter', 'profiles');
+  let synced = 0;
+  let failed = 0;
+
+  // Get all pool directories
+  if (!fs.existsSync(baseDir)) {
+    console.log('[SyncAll] No profiles directory found');
+    return { synced: 0, failed: 0 };
+  }
+
+  const pools = fs.readdirSync(baseDir).filter(d => d.startsWith('pool-'));
+  console.log(`[SyncAll] Syncing Chrome sessions to ${pools.length} pools...`);
+
+  for (const pool of pools) {
+    const poolPath = path.join(baseDir, pool);
+    const result = await syncSessionDataFromChrome(poolPath);
+    if (result) {
+      synced++;
+    } else {
+      failed++;
+    }
+  }
+
+  console.log(`[SyncAll] Done: ${synced} synced, ${failed} skipped/failed`);
+  return { synced, failed };
+}
+
 /** Page metadata */
 export interface PageInfo {
   id: string;
