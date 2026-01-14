@@ -96,23 +96,13 @@ Some domains are USELESS without login. The system auto-detects these and warns 
 - **Public content**: google.com (search), youtube.com, notion.site, discord.com (public servers), figma.com (public designs)
 
 ### How it works:
-1. `pool-0` contains sessions synced from your real Chrome
-2. **Auto-switch**: When creating a page with an auth-required URL, HydraSpecter automatically switches to pool-0
-3. Response includes `autoSwitched` field when this happens
+1. Sessions persist in ALL pools (pool-0 to pool-4), not just pool-0
+2. `pool-0` gets Chrome cookies synced on first launch (when Chrome is closed)
+3. Once logged in to any pool, that session persists forever
+4. Auto-switch tries pool-0 first for auth domains, falls back to other pools if busy
 
-### Manual switch (if needed):
-```javascript
-browser({ action: "switch_auth" })  // Force switch to pool-0
-```
-
-### Response fields:
-```javascript
-{
-  authRequired: true,           // Domain needs login
-  autoSwitched: "...",          // Present if auto-switched to pool-0
-  authWarning: "..."            // Only if switch failed
-}
-```
+### If not logged in:
+Login manually once in the HydraSpecter browser - session will persist in that pool.
 
 ## MCP Configuration
 
