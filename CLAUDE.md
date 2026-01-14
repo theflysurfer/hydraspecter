@@ -97,22 +97,20 @@ Some domains are USELESS without login. The system auto-detects these and warns 
 
 ### How it works:
 1. `pool-0` contains sessions synced from your real Chrome
-2. Other pools (pool-1 to pool-4) are for parallel sessions
-3. If you navigate to notion.so but have pool-2, you'll see `authWarning` in response
+2. **Auto-switch**: When creating a page with an auth-required URL, HydraSpecter automatically switches to pool-0
+3. Response includes `autoSwitched` field when this happens
 
-### Solution: `switch_auth`
+### Manual switch (if needed):
 ```javascript
-// Switch to pool-0 before accessing auth-required sites
-browser({ action: "switch_auth" })
-// Then create page - will use pool-0 with your sessions
-browser({ action: "create", target: "https://notion.so" })
+browser({ action: "switch_auth" })  // Force switch to pool-0
 ```
 
 ### Response fields:
 ```javascript
 {
   authRequired: true,           // Domain needs login
-  authWarning: "..."            // Only if using wrong profile
+  autoSwitched: "...",          // Present if auto-switched to pool-0
+  authWarning: "..."            // Only if switch failed
 }
 ```
 

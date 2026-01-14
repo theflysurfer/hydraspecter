@@ -2910,6 +2910,23 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
    */
   private async createGlobalPage(url?: string, mode: 'session' | 'incognito' = 'session'): Promise<ToolResult> {
     try {
+      // Auto-switch to pool-0 if URL requires auth and we're not already on it
+      let autoSwitched = false;
+      if (url && mode !== 'incognito' && requiresAuth(url)) {
+        const currentProfile = this.globalProfile.getProfileId();
+        if (currentProfile !== 'pool-0') {
+          console.log(`[AutoSwitch] Domain requires auth, switching to pool-0...`);
+          const switchResult = await switchToAuthProfile();
+          if (switchResult.success) {
+            this.globalProfile = getGlobalProfile();
+            autoSwitched = true;
+            console.log(`[AutoSwitch] Switched from ${switchResult.previousProfile} to pool-0`);
+          } else {
+            console.warn(`[AutoSwitch] Failed to switch to pool-0: ${switchResult.error}`);
+          }
+        }
+      }
+
       let pageId: string;
       let page: import('playwright').Page;
 
@@ -2992,6 +3009,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           mode,
           protectionLevel,
           authRequired,
+          ...(autoSwitched && { autoSwitched: 'Automatically switched to pool-0 (auth profile)' }),
           ...(authWarning && { authWarning }),
           settings: {
             humanize: settings.humanizeMouse,
