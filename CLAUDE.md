@@ -104,6 +104,12 @@ Some domains are USELESS without login. The system auto-detects these and warns 
 ### If not logged in:
 Login manually once in the HydraSpecter browser - session will persist in that pool.
 
+### Common mistakes:
+- ❌ `browser({ action: "create", target: "https://notion.so" })` → Redirects to marketing page
+- ✅ `browser({ action: "create", target: "https://notion.so/[page-id]" })` → Direct to workspace
+- ❌ `options: {"pool": "pool-1"}` → This parameter doesn't exist
+- ✅ Just use `target` with the full URL
+
 ## MCP Configuration
 
 ### File Hierarchy
