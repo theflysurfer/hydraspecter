@@ -2,6 +2,8 @@
 
 Browser automation MCP server with stealth, session persistence, and anti-detection.
 
+**Hot Reload**: MCP SDK 1.25.2 enables automatic tool reload. No restart needed after `npm run build`.
+
 ## Quick Start
 
 ```javascript
@@ -58,9 +60,10 @@ Detection triggers automatic level increment. Persists to `~/.hydraspecter/domai
 - `browser_get_endpoint` - Get endpoint details
 - `browser_capture_from_network` - Auto-capture from network logs
 
-### Protection
+### Protection & Profiles
 - `browser_get_protection_level` / `browser_set_protection_level`
 - `browser_list_profiles` / `browser_release_profile`
+- `browser_switch_auth_profile` - Switch to pool-0 (auth sessions)
 
 ## Troubleshooting
 
@@ -77,6 +80,41 @@ browser_click({ position: { x: 100, y: 200 } })  // Or coordinates
 
 ### Cross-origin iframe (Google Sign-In)
 Use `position` parameter with coordinates from `browser_evaluate`.
+
+## Authentication-Required Domains
+
+Some domains are USELESS without login. The system auto-detects these and warns if using wrong profile.
+
+### Auth REQUIRED (useless without login):
+- **Google private**: gmail.com, mail.google.com, calendar.google.com, drive.google.com, docs.google.com, sheets.google.com, meet.google.com
+- **Notion workspace**: notion.so (NOT notion.site = public pages)
+- **Private messaging**: slack.com, outlook.com, teams.microsoft.com
+
+### Auth OPTIONAL (can scrape without login):
+- **Code hosting**: github.com, gitlab.com (public repos)
+- **E-commerce**: amazon.com, shopping sites
+- **Public content**: google.com (search), youtube.com, notion.site, discord.com (public servers), figma.com (public designs)
+
+### How it works:
+1. `pool-0` contains sessions synced from your real Chrome
+2. Other pools (pool-1 to pool-4) are for parallel sessions
+3. If you navigate to notion.so but have pool-2, you'll see `authWarning` in response
+
+### Solution: `switch_auth`
+```javascript
+// Switch to pool-0 before accessing auth-required sites
+browser({ action: "switch_auth" })
+// Then create page - will use pool-0 with your sessions
+browser({ action: "create", target: "https://notion.so" })
+```
+
+### Response fields:
+```javascript
+{
+  authRequired: true,           // Domain needs login
+  authWarning: "..."            // Only if using wrong profile
+}
+```
 
 ## MCP Configuration
 

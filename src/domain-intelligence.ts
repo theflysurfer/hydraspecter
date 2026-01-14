@@ -43,6 +43,36 @@ const HIGH_PROTECTION_DOMAINS = new Set([
 ]);
 
 /**
+ * Domains that ALWAYS require authenticated session (pool-0)
+ * These are PRIVATE services where unauthenticated access is useless.
+ *
+ * NOT included (can be scraped without login):
+ * - github.com, gitlab.com (public repos)
+ * - amazon.com (product pages)
+ * - google.com (search, YouTube)
+ * - notion.site (public Notion pages)
+ * - discord.com (public servers)
+ * - figma.com (public designs)
+ */
+const AUTH_REQUIRED_DOMAINS = new Set([
+  // Google PRIVATE services (not google.com which has public search/YouTube)
+  'gmail.com',
+  'mail.google.com',
+  'calendar.google.com',
+  'drive.google.com',
+  'docs.google.com',
+  'sheets.google.com',
+  'meet.google.com',
+  // Notion workspace (NOT notion.site which is public pages)
+  'notion.so',
+  // Private messaging
+  'slack.com',
+  'outlook.com',
+  'outlook.live.com',
+  'teams.microsoft.com',
+]);
+
+/**
  * Protection settings per level
  */
 const PROTECTION_LEVELS: Record<ProtectionLevel, ProtectionSettings> = {
@@ -175,6 +205,27 @@ export class DomainIntelligence {
   getSettings(url: string): ProtectionSettings {
     const level = this.getLevel(url);
     return PROTECTION_LEVELS[level];
+  }
+
+  /**
+   * Check if a URL/domain requires authenticated session (pool-0)
+   * Returns true for productivity tools like Notion, Google, etc.
+   */
+  requiresAuth(url: string): boolean {
+    const domain = this.getRootDomain(url);
+    const hostname = url.includes('://') ? new URL(url).hostname : url;
+
+    // Check exact match first (for subdomains like calendar.google.com)
+    if (AUTH_REQUIRED_DOMAINS.has(hostname.replace(/^www\./, ''))) {
+      return true;
+    }
+
+    // Check root domain
+    if (AUTH_REQUIRED_DOMAINS.has(domain)) {
+      return true;
+    }
+
+    return false;
   }
 
   /**
@@ -352,4 +403,19 @@ export function getDomainIntelligence(storagePath?: string): DomainIntelligence 
  */
 export function getProtectionSettings(url: string): ProtectionSettings {
   return getDomainIntelligence().getSettings(url);
+}
+
+/**
+ * Check if a URL requires authenticated session (pool-0)
+ * Use this to decide whether to force the synced Chrome profile
+ */
+export function requiresAuth(url: string): boolean {
+  return getDomainIntelligence().requiresAuth(url);
+}
+
+/**
+ * Get list of auth-required domains (for documentation/LLM context)
+ */
+export function getAuthRequiredDomains(): string[] {
+  return Array.from(AUTH_REQUIRED_DOMAINS);
 }

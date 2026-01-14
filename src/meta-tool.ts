@@ -47,6 +47,7 @@ const ACTION_MAP: Record<string, string> = {
   'wait_element': 'browser_wait_for_element',
   'wait_navigation': 'browser_wait_for_navigation',
   'wait_download': 'browser_wait_for_download',
+  'wait_request': 'browser_wait_for_request',
 
   // Advanced
   'evaluate': 'browser_evaluate',
@@ -60,6 +61,8 @@ const ACTION_MAP: Record<string, string> = {
   'domains': 'browser_list_domains',
   'profiles': 'browser_list_profiles',
   'release_profile': 'browser_release_profile',
+  'switch_auth': 'browser_switch_auth_profile',
+  'use_auth': 'browser_switch_auth_profile',
   'devices': 'browser_list_devices',
 
   // Debugging
@@ -110,12 +113,18 @@ export class MetaTool {
 4. browser { action: "snapshot", pageId: "..." } → Get page content
 
 **Actions by Category:**
-• Session: create, close, list, save_session
+• Session: create, close, list, save_session, switch_auth
 • Navigate: navigate/goto, back, forward, refresh
 • Interact: click, type, fill, select, scroll
 • Extract: snapshot, screenshot, markdown, text, pdf
-• Wait: wait_element, wait_navigation
+• Wait: wait_element, wait_navigation, wait_request
+• Debug: enable_network, network, enable_console, console
+• Endpoints: capture, list_endpoints, save_endpoint, get_endpoint
 • Advanced: evaluate, batch, protection
+
+**Auth-Required Sites:**
+Use { action: "switch_auth" } before accessing Notion, Gmail, Google Calendar, Slack, etc.
+This switches to pool-0 which has your Chrome sessions synced.
 
 **Common Parameters:**
 • action (required): What to do
@@ -131,7 +140,13 @@ export class MetaTool {
 • Snapshot: { action: "snapshot", pageId: "abc" }
 • Screenshot: { action: "screenshot", pageId: "abc", options: { fullPage: true } }
 • Scroll: { action: "scroll", pageId: "abc", options: { direction: "down" } }
-• Close: { action: "close", pageId: "abc" }`,
+• Close: { action: "close", pageId: "abc" }
+
+**Network Capture (important options):**
+• Enable: { action: "enable_network", pageId: "abc" }
+• Get logs: { action: "network", pageId: "abc", options: { urlPattern: "api/save", limit: 10 } }
+• Wait for request: { action: "wait_request", pageId: "abc", options: { urlPattern: "saveTransaction", timeout: 5000 } }
+• Capture endpoint: { action: "capture", pageId: "abc", options: { urlPattern: "api/cart" } }`,
       inputSchema: {
         type: 'object',
         properties: {

@@ -156,13 +156,32 @@ export class ProfilePool {
 
   /**
    * Acquire an available profile from the pool
+   * @param preferredId - Optional profile ID to try first (e.g., "pool-0" for auth)
    * @returns Profile path if available, null if all profiles are in use
    */
-  async acquireProfile(): Promise<{ profileId: string; profilePath: string } | null> {
+  async acquireProfile(preferredId?: string): Promise<{ profileId: string; profilePath: string } | null> {
     // Clean stale locks first
     this.cleanStaleLocks();
 
+    // Build order of profiles to try (preferred first if specified)
+    const profileOrder: number[] = [];
+    if (preferredId) {
+      const match = preferredId.match(/pool-(\d+)/);
+      if (match && match[1]) {
+        const preferredIndex = parseInt(match[1], 10);
+        if (preferredIndex >= 0 && preferredIndex < this.poolSize) {
+          profileOrder.push(preferredIndex);
+        }
+      }
+    }
+    // Add remaining profiles in order
     for (let i = 0; i < this.poolSize; i++) {
+      if (!profileOrder.includes(i)) {
+        profileOrder.push(i);
+      }
+    }
+
+    for (const i of profileOrder) {
       const profileId = `pool-${i}`;
       const lockPath = this.getLockPath(profileId);
       const profilePath = path.join(this.profilesDir, profileId);

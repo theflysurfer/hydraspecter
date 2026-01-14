@@ -7,8 +7,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-// Enable stealth mode
-chromiumExtra.use(StealthPlugin());
+// Enable stealth mode but disable navigator.webdriver evasion
+// (it adds --disable-blink-features=AutomationControlled which causes Chrome warning)
+// We'll use JavaScript injection instead (see addInitScript below)
+const stealthPlugin = StealthPlugin();
+stealthPlugin.enabledEvasions.delete('navigator.webdriver');
+chromiumExtra.use(stealthPlugin);
 
 // Critical domains that need session data (cookies + localStorage + IndexedDB)
 const CRITICAL_DOMAINS = [
@@ -183,17 +187,20 @@ export class GlobalProfile {
   private profilePool: ProfilePool;
   private headless: boolean;
   private channel?: 'chrome' | 'msedge';
+  private preferredProfileId?: string;
 
   constructor(options?: {
     headless?: boolean;
     channel?: 'chrome' | 'msedge';
     poolSize?: number;
+    preferredProfileId?: string;
   }) {
     this.headless = options?.headless ?? false; // Default: visible for anti-detection
     // For persistent/incognito modes, default to real Chrome for sessions & anti-detection
     // Chromium is used for isolated mode (handled in BrowserManager)
     this.channel = options?.channel ?? 'chrome';
     this.profilePool = getProfilePool({ poolSize: options?.poolSize });
+    this.preferredProfileId = options?.preferredProfileId;
   }
 
   /**
@@ -205,8 +212,8 @@ export class GlobalProfile {
       return this.context;
     }
 
-    // Acquire a profile from the pool
-    const acquired = await this.profilePool.acquireProfile();
+    // Acquire a profile from the pool (use preferred if specified)
+    const acquired = await this.profilePool.acquireProfile(this.preferredProfileId);
     if (!acquired) {
       // All profiles are in use
       const profiles = this.profilePool.listProfiles();
@@ -231,7 +238,6 @@ export class GlobalProfile {
       // Anti-detection flags (recommended by Gemini 2025-2026)
       ignoreDefaultArgs: ['--enable-automation'],
       args: [
-        '--disable-blink-features=AutomationControlled',
         '--disable-infobars',
         '--disable-dev-shm-usage',
         '--no-first-run',
@@ -256,6 +262,14 @@ export class GlobalProfile {
     }
 
     this.context = await chromiumExtra.launchPersistentContext(this.profileDir, launchOptions);
+
+    // Hide navigator.webdriver via JavaScript injection (replaces the Chrome flag that caused warning)
+    await this.context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => false,
+        configurable: true
+      });
+    });
 
     // Handle context close
     this.context.on('close', () => {
@@ -485,6 +499,57 @@ export async function resetGlobalProfile(): Promise<void> {
   if (globalProfileInstance) {
     await globalProfileInstance.close();
     globalProfileInstance = null;
+  }
+}
+
+/**
+ * Switch to pool-0 (the auth profile with synced Chrome sessions).
+ * Closes current context and reacquires pool-0 specifically.
+ * Use this when navigating to auth-required domains (Notion, Gmail, etc.)
+ */
+export async function switchToAuthProfile(): Promise<{
+  success: boolean;
+  previousProfile: string | null;
+  newProfile: string | null;
+  error?: string;
+}> {
+  const previousProfile = globalProfileInstance?.getProfileId() || null;
+
+  // If already using pool-0, just return success
+  if (previousProfile === 'pool-0') {
+    return { success: true, previousProfile, newProfile: 'pool-0' };
+  }
+
+  // Close current profile if exists
+  if (globalProfileInstance) {
+    await globalProfileInstance.close();
+    globalProfileInstance = null;
+  }
+
+  // Create new instance with pool-0 as preferred profile
+  globalProfileInstance = new GlobalProfile({ preferredProfileId: 'pool-0' });
+
+  try {
+    await globalProfileInstance.getContext();
+    const newProfile = globalProfileInstance.getProfileId();
+
+    if (newProfile === 'pool-0') {
+      return { success: true, previousProfile, newProfile };
+    } else {
+      return {
+        success: false,
+        previousProfile,
+        newProfile,
+        error: `Could not acquire pool-0 (got ${newProfile}). pool-0 may be locked by another process.`
+      };
+    }
+  } catch (error) {
+    return {
+      success: false,
+      previousProfile,
+      newProfile: null,
+      error: `Failed to switch profile: ${error instanceof Error ? error.message : error}`
+    };
   }
 }
 

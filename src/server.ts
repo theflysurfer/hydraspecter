@@ -126,7 +126,7 @@ export class ConcurrentBrowserServer {
   async run() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('HydraSpecter MCP Server started');
+    console.error('HydraSpecter MCP Server started [HOT RELOAD TEST]');
   }
 
   async shutdown() {

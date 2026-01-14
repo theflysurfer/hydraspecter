@@ -53,8 +53,8 @@ import { humanScrollDown, humanScrollUp, humanScrollToElement, humanScrollToTop,
 import { DetectionMonitor, DetectionResult } from './utils/detection-monitor.js';
 import { RateLimiter } from './utils/rate-limiter.js';
 import { resilientClick, DEFAULT_RESILIENCE, type ResilienceOptions } from './utils/click-resilience.js';
-import { getGlobalProfile, GlobalProfile, AllProfilesInUseError } from './global-profile.js';
-import { getDomainIntelligence, DomainIntelligence } from './domain-intelligence.js';
+import { getGlobalProfile, GlobalProfile, AllProfilesInUseError, switchToAuthProfile } from './global-profile.js';
+import { getDomainIntelligence, DomainIntelligence, requiresAuth } from './domain-intelligence.js';
 import { getApiBookmarks } from './api-bookmarks.js';
 
 /**
@@ -719,6 +719,38 @@ Returns: { released: true, contextClosed: true } when browser was closed.
           }
         }
       },
+      {
+        name: 'browser_switch_auth_profile',
+        description: `Switch to pool-0 (the authenticated profile with synced Chrome sessions).
+
+Use when navigating to auth-required domains like:
+• Notion (notion.so)
+• Gmail (mail.google.com)
+• Google Calendar (calendar.google.com)
+• Slack, Teams, etc.
+
+This closes the current browser context and reopens with pool-0.
+pool-0 is automatically synced from your real Chrome profile.
+
+Returns:
+• success: true if switched to pool-0
+• previousProfile: the profile that was closed
+• newProfile: should be "pool-0"
+• error: if pool-0 is locked by another process`,
+        inputSchema: {
+          type: 'object',
+          properties: {}
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            success: { type: 'boolean' },
+            previousProfile: { type: 'string' },
+            newProfile: { type: 'string' },
+            error: { type: 'string' }
+          }
+        }
+      },
 
       // Device emulation
       {
@@ -831,10 +863,11 @@ Use browser_get_network_logs to retrieve captured data.`,
         name: 'browser_get_network_logs',
         description: `Get captured network requests/responses.
 
-Returns: request URL, method, headers, status, timing, response size.
-Filter by resource type (document, xhr, fetch, script, stylesheet, image, etc.)
+Returns: URL, method, status, timing, response size.
+By default excludes headers and truncates POST data to save tokens.
 
-**Auto Token Optimization:** Large result sets (>500 tokens) are automatically formatted as TOON (40-60% fewer tokens).`,
+**Filters:** resourceType (xhr, fetch, document), urlPattern (regex)
+**Token saving:** compact=true (default) excludes headers, truncates postData`,
         inputSchema: {
           type: 'object',
           properties: {
@@ -852,8 +885,13 @@ Filter by resource type (document, xhr, fetch, script, stylesheet, image, etc.)
             },
             limit: {
               type: 'number',
-              description: 'Maximum number of entries to return (default: 100)',
-              default: 100
+              description: 'Maximum entries to return (default: 30)',
+              default: 30
+            },
+            compact: {
+              type: 'boolean',
+              description: 'Exclude headers, truncate postData (default: true). Set false for full details.',
+              default: true
             },
             clear: {
               type: 'boolean',
@@ -946,6 +984,42 @@ Use this after clicking a download link. Returns download path and filename.`,
             }
           },
           required: ['instanceId']
+        }
+      },
+      {
+        name: 'browser_wait_for_request',
+        description: `Wait for a network request matching a URL pattern.
+
+**Workflow:**
+1. Enable network monitoring (create with enableNetworkMonitoring or enable_network)
+2. Call wait_request with urlPattern
+3. Perform the UI action that triggers the request
+4. Get the captured request details
+
+Returns: URL, method, headers, postData, status, response details.
+Ideal for capturing API calls during user interactions.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            },
+            urlPattern: {
+              type: 'string',
+              description: 'URL pattern to match (regex supported)'
+            },
+            method: {
+              type: 'string',
+              description: 'HTTP method filter (GET, POST, etc.)',
+            },
+            timeout: {
+              type: 'number',
+              description: 'Timeout in milliseconds (default: 10000)',
+              default: 10000
+            }
+          },
+          required: ['instanceId', 'urlPattern']
         }
       },
       {
@@ -2143,6 +2217,10 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           result = await this.releaseProfile(args.profileId);
           break;
 
+        case 'browser_switch_auth_profile':
+          result = await this.switchToAuthProfile();
+          break;
+
         // Device emulation
         case 'browser_list_devices': {
           const filter = args.filter?.toLowerCase();
@@ -2240,19 +2318,43 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             logs = logs.filter(log => regex.test(log.url));
           }
 
-          // Limit results
-          const limit = args.limit || 100;
+          // Limit results (default: 30, reduced from 100 to save tokens)
+          const limit = args.limit || 30;
           logs = logs.slice(-limit);
+
+          // Compact mode (default: true) - exclude headers, truncate postData
+          const compact = args.compact !== false;
+          let outputLogs: any[] = logs;
+
+          if (compact) {
+            outputLogs = logs.map(log => ({
+              id: log.id,
+              url: log.url,
+              method: log.method,
+              resourceType: log.resourceType,
+              status: log.status,
+              statusText: log.statusText,
+              responseSize: log.responseSize,
+              timing: log.timing,
+              // Truncate postData to 200 chars in compact mode
+              postData: log.postData
+                ? (log.postData.length > 200 ? log.postData.substring(0, 200) + '...[truncated]' : log.postData)
+                : undefined
+            }));
+          }
 
           // Clear if requested
           if (args.clear) {
             this.networkLogs.delete(args.instanceId);
           }
 
+          const totalCount = this.networkLogs.get(args.instanceId)?.length || 0;
           const data = {
-            logs,
-            count: logs.length,
-            totalCount: this.networkLogs.get(args.instanceId)?.length || 0
+            logs: outputLogs,
+            count: outputLogs.length,
+            totalCount,
+            compact,
+            hint: compact ? 'Use compact=false for full headers/postData' : undefined
           };
 
           // Auto-apply TOON format for large tabular data
@@ -2262,7 +2364,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             data: formatted.format === 'toon' ? {
               format: 'toon',
               content: formatted.content,
-              count: logs.length,
+              count: outputLogs.length,
               tokenStats: formatted.tokenStats
             } : data
           };
@@ -2347,6 +2449,82 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               result = {
                 success: false,
                 error: `Download failed: ${error instanceof Error ? error.message : error}`
+              };
+            }
+          }
+          break;
+        }
+
+        case 'browser_wait_for_request': {
+          const page = await this.getPage(args.instanceId);
+          if (!page) {
+            result = { success: false, error: `Instance ${args.instanceId} not found` };
+          } else if (!this.networkMonitoringEnabled.has(args.instanceId)) {
+            result = {
+              success: false,
+              error: 'Network monitoring not enabled. Use browser_create with enableNetworkMonitoring: true, or call enable_network first.'
+            };
+          } else {
+            try {
+              const urlPattern = new RegExp(args.urlPattern, 'i');
+              const methodFilter = args.method?.toUpperCase();
+              const timeout = args.timeout || 10000;
+              const startTime = Date.now();
+
+              // Poll network logs for matching request
+              let matchedRequest: NetworkEntry | null = null;
+              const initialLogCount = this.networkLogs.get(args.instanceId)?.length || 0;
+
+              while (Date.now() - startTime < timeout) {
+                const logs = this.networkLogs.get(args.instanceId) || [];
+                // Only check new entries since we started waiting
+                for (let i = initialLogCount; i < logs.length; i++) {
+                  const log = logs[i];
+                  if (log && urlPattern.test(log.url)) {
+                    if (!methodFilter || log.method === methodFilter) {
+                      matchedRequest = log;
+                      break;
+                    }
+                  }
+                }
+                if (matchedRequest) break;
+                await new Promise(resolve => setTimeout(resolve, 100)); // Poll every 100ms
+              }
+
+              if (matchedRequest) {
+                result = {
+                  success: true,
+                  data: {
+                    id: matchedRequest.id,
+                    url: matchedRequest.url,
+                    method: matchedRequest.method,
+                    status: matchedRequest.status,
+                    statusText: matchedRequest.statusText,
+                    resourceType: matchedRequest.resourceType,
+                    requestHeaders: matchedRequest.requestHeaders,
+                    responseHeaders: matchedRequest.responseHeaders,
+                    postData: matchedRequest.postData,
+                    responseSize: matchedRequest.responseSize,
+                    timing: matchedRequest.timing,
+                    waitTime: Date.now() - startTime
+                  }
+                };
+              } else {
+                result = {
+                  success: false,
+                  error: `No request matching "${args.urlPattern}" found within ${timeout}ms`,
+                  data: {
+                    urlPattern: args.urlPattern,
+                    method: methodFilter,
+                    timeout,
+                    logsChecked: (this.networkLogs.get(args.instanceId)?.length || 0) - initialLogCount
+                  }
+                };
+              }
+            } catch (error) {
+              result = {
+                success: false,
+                error: `Wait for request failed: ${error instanceof Error ? error.message : error}`
               };
             }
           }
@@ -2782,13 +2960,25 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
       let protectionLevel = 0;
       let settings = this.domainIntelligence.getSettings('default');
 
+      // Check if URL requires authenticated session
+      let authRequired = false;
+      let authWarning: string | undefined;
+
       // Navigate if URL provided
       if (url) {
         const domain = this.domainIntelligence.getRootDomain(url);
         protectionLevel = this.domainIntelligence.getLevel(url);
         settings = this.domainIntelligence.getSettings(url);
+        authRequired = requiresAuth(url);
 
-        console.log(`[${mode === 'incognito' ? 'Incognito' : 'GlobalProfile'}] Creating page for ${domain} (protection level: ${protectionLevel})`);
+        console.log(`[${mode === 'incognito' ? 'Incognito' : 'GlobalProfile'}] Creating page for ${domain} (protection level: ${protectionLevel}, authRequired: ${authRequired})`);
+
+        // Warn if auth-required domain but not using pool-0 (the synced profile)
+        const currentProfile = this.globalProfile.getProfileId();
+        if (authRequired && currentProfile !== 'pool-0' && mode !== 'incognito') {
+          authWarning = `This domain (${domain}) requires authentication. You are using ${currentProfile} instead of pool-0 (the Chrome-synced profile). You may not be logged in. Consider restarting Claude Code to get pool-0.`;
+          console.warn(`[AuthWarning] ${authWarning}`);
+        }
 
         await page.goto(url, { waitUntil: 'load' });
       }
@@ -2801,6 +2991,8 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           title: await page.title(),
           mode,
           protectionLevel,
+          authRequired,
+          ...(authWarning && { authWarning }),
           settings: {
             humanize: settings.humanizeMouse,
             headless: settings.headless,
@@ -2959,6 +3151,25 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         profileId,
       },
       error: result.released ? undefined : `Profile ${profileId} not found or could not be released`,
+    };
+  }
+
+  /**
+   * Switch to the authenticated profile (pool-0) for auth-required domains
+   */
+  private async switchToAuthProfile(): Promise<ToolResult> {
+    const result = await switchToAuthProfile();
+
+    // Update our reference to the global profile singleton
+    this.globalProfile = getGlobalProfile();
+
+    return {
+      success: result.success,
+      data: {
+        previousProfile: result.previousProfile,
+        newProfile: result.newProfile,
+      },
+      error: result.error,
     };
   }
 

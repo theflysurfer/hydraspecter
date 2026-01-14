@@ -7,8 +7,11 @@ import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// Enable stealth mode for Chromium
-chromiumExtra.use(StealthPlugin());
+// Enable stealth mode but disable navigator.webdriver evasion
+// (it adds --disable-blink-features=AutomationControlled which causes Chrome warning)
+const stealthPlugin = StealthPlugin();
+stealthPlugin.enabledEvasions.delete('navigator.webdriver');
+chromiumExtra.use(stealthPlugin);
 
 export class BrowserManager {
   private instances: Map<string, BrowserInstance> = new Map();
@@ -233,9 +236,18 @@ export class BrowserManager {
         }
 
         context = await browser.newContext(contextOptions);
+
+        // Hide navigator.webdriver via JavaScript injection
+        await context.addInitScript(() => {
+          Object.defineProperty(navigator, 'webdriver', {
+            get: () => false,
+            configurable: true
+          });
+        });
+
         page = await context.newPage();
       }
-      
+
       const instanceId = uuidv4();
       const instance: BrowserInstance = {
         id: instanceId,
@@ -410,7 +422,6 @@ export class BrowserManager {
       ignoreDefaultArgs: ['--enable-automation'],
       // Comprehensive anti-detection flags
       args: [
-        '--disable-blink-features=AutomationControlled',  // Critical: hides automation flag
         '--disable-infobars',  // Hides "Chrome is being controlled" banner
         '--disable-dev-shm-usage',  // Improves stability
         '--no-first-run',  // Prevents first-run dialogs
@@ -469,6 +480,14 @@ export class BrowserManager {
       viewport: config.viewport === null ? null : config.viewport,
       ignoreHTTPSErrors: config.contextOptions?.ignoreHTTPSErrors,
       bypassCSP: config.contextOptions?.bypassCSP,
+    });
+
+    // Hide navigator.webdriver via JavaScript injection
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', {
+        get: () => false,
+        configurable: true
+      });
     });
 
     // Get or create a page
