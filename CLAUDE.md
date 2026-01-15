@@ -68,9 +68,20 @@ Detection triggers automatic level increment. Persists to `~/.hydraspecter/domai
 ## Troubleshooting
 
 ### Not logged in (session not synced)
-Chrome must be **closed** for auto-sync to copy cookies. If Chrome is open:
-1. Close Chrome → restart Claude Code → sessions will sync
-2. Or login manually in HydraSpecter browser (session persists in pool-0)
+Chrome cookies are synced to all 10 pools at startup. If sync fails:
+
+**Option 1: VSS sync (Chrome can stay open)**
+Run as Admin in PowerShell:
+```powershell
+.\scripts\sync-cookies-vss.ps1
+```
+This uses Windows Shadow Copy to read locked files - works even with Chrome open.
+
+**Option 2: Manual login**
+Login manually in the HydraSpecter browser once - session persists forever in that pool.
+
+**Option 3: Close Chrome briefly**
+Close Chrome → restart Claude Code → sessions auto-sync → reopen Chrome.
 
 ### Click fails on SPA (React/Vue)
 ```javascript
@@ -96,10 +107,10 @@ Some domains are USELESS without login. The system auto-detects these and warns 
 - **Public content**: google.com (search), youtube.com, notion.site, discord.com (public servers), figma.com (public designs)
 
 ### How it works:
-1. Sessions persist in ALL pools (pool-0 to pool-4), not just pool-0
-2. `pool-0` gets Chrome cookies synced on first launch (when Chrome is closed)
+1. **10 pools** (pool-0 to pool-9) for concurrent sessions
+2. **At startup**, Chrome cookies are synced to ALL pools
 3. Once logged in to any pool, that session persists forever
-4. Auto-switch tries pool-0 first for auth domains, falls back to other pools if busy
+4. 10 LLMs can run in parallel, each with auth sessions
 
 ### If not logged in:
 Login manually once in the HydraSpecter browser - session will persist in that pool.
@@ -153,9 +164,10 @@ In `~/.claude.json`:
 
 ```
 ~/.hydraspecter/
-├── profiles/pool-{0-4}/     # Session data (cookies, localStorage)
+├── profiles/pool-{0-9}/     # 10 concurrent session pools
 ├── domain-intelligence.json # Protection levels
-└── api-bookmarks.json       # Saved API endpoints
+├── api-bookmarks.json       # Saved API endpoints
+└── locks/                   # Pool lock files (prevent conflicts)
 ```
 
 ## Architecture

@@ -6,6 +6,7 @@ import { getProfilePool, ProfilePool, ProfileStatus } from './profile-pool.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import Database from 'better-sqlite3';
 
 // Enable stealth mode but disable navigator.webdriver evasion
 // (it adds --disable-blink-features=AutomationControlled which causes Chrome warning)
@@ -42,6 +43,125 @@ function copyDirSync(src: string, dest: string): void {
         // Skip locked files
       }
     }
+  }
+}
+
+/**
+ * Try to sync cookies using Windows Volume Shadow Copy (VSS).
+ * This is the only reliable way to copy locked files on Windows.
+ * Requires running the sync-cookies-vss.ps1 script with admin privileges.
+ * Returns true if VSS sync was successful.
+ */
+function trySyncViaVSS(targetProfileDir: string): boolean {
+  try {
+    const { execSync } = require('child_process');
+    const scriptPath = path.join(__dirname, '..', 'scripts', 'sync-cookies-vss.ps1');
+
+    // Check if script exists
+    if (!fs.existsSync(scriptPath)) {
+      console.log('[SessionSync] VSS script not found, skipping');
+      return false;
+    }
+
+    // Try to run the VSS script (requires admin)
+    execSync(
+      `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}" -TargetDir "${path.dirname(targetProfileDir)}"`,
+      { stdio: 'pipe', timeout: 30000 }
+    );
+
+    console.log('[SessionSync] ✓ VSS sync succeeded');
+    return true;
+  } catch (error: any) {
+    // VSS requires admin privileges - this is expected to fail in normal mode
+    if (error.status === 1 || error.message?.includes('Administrator')) {
+      console.log('[SessionSync] VSS requires admin privileges - run sync-cookies-vss.ps1 as admin once');
+    } else {
+      console.log(`[SessionSync] VSS sync failed: ${error.message}`);
+    }
+    return false;
+  }
+}
+
+/**
+ * Copy cookies using SQLite read-only mode.
+ * This works even when Chrome is running and has the file locked.
+ * Uses better-sqlite3 with readonly mode to bypass Chrome's lock.
+ */
+function syncCookiesViaSqlite(chromeCookiesPath: string, targetCookiesPath: string): boolean {
+  try {
+    // Open Chrome's cookies database in read-only mode
+    // This bypasses the file lock that Chrome holds
+    const sourceDb = new Database(chromeCookiesPath, {
+      readonly: true,
+      fileMustExist: true
+    });
+
+    // Read all cookies from Chrome
+    const cookies = sourceDb.prepare('SELECT * FROM cookies').all();
+    sourceDb.close();
+
+    if (cookies.length === 0) {
+      console.log('[SessionSync] No cookies found in Chrome');
+      return false;
+    }
+
+    // Ensure target directory exists
+    const targetDir = path.dirname(targetCookiesPath);
+    fs.mkdirSync(targetDir, { recursive: true });
+
+    // Delete existing target database if it exists (to avoid conflicts)
+    if (fs.existsSync(targetCookiesPath)) {
+      fs.unlinkSync(targetCookiesPath);
+    }
+    const journalPath = targetCookiesPath + '-journal';
+    if (fs.existsSync(journalPath)) {
+      fs.unlinkSync(journalPath);
+    }
+
+    // Create new target database with same schema
+    const targetDb = new Database(targetCookiesPath);
+
+    // Get the schema from source and create in target
+    const sourceDbForSchema = new Database(chromeCookiesPath, { readonly: true, fileMustExist: true });
+    const tableInfo = sourceDbForSchema.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='cookies'").get() as { sql: string } | undefined;
+    sourceDbForSchema.close();
+
+    if (!tableInfo?.sql) {
+      console.log('[SessionSync] Could not read cookies table schema');
+      targetDb.close();
+      return false;
+    }
+
+    // Create the cookies table
+    targetDb.exec(tableInfo.sql);
+
+    // Get column names for the insert
+    const columns = Object.keys(cookies[0] as object);
+    const placeholders = columns.map(() => '?').join(', ');
+    const insertStmt = targetDb.prepare(
+      `INSERT OR REPLACE INTO cookies (${columns.join(', ')}) VALUES (${placeholders})`
+    );
+
+    // Insert all cookies in a transaction for speed
+    const insertMany = targetDb.transaction((cookiesList: any[]) => {
+      for (const cookie of cookiesList) {
+        insertStmt.run(...columns.map(col => (cookie as any)[col]));
+      }
+    });
+
+    insertMany(cookies);
+    targetDb.close();
+
+    console.log(`[SessionSync] ✓ Cookies synced via SQLite (${cookies.length} cookies)`);
+    return true;
+  } catch (error: any) {
+    // If even SQLite read-only fails, Chrome might have an exclusive lock
+    if (error.code === 'SQLITE_BUSY' || error.code === 'SQLITE_LOCKED') {
+      console.log('[SessionSync] ⊘ SQLite database is busy/locked');
+    } else {
+      console.log(`[SessionSync] ⊘ SQLite sync failed: ${error.message}`);
+    }
+    return false;
   }
 }
 
@@ -84,16 +204,30 @@ async function syncSessionDataFromChrome(targetProfileDir: string): Promise<bool
     const targetNetworkDir = path.join(targetProfileDir, 'Network');
     fs.mkdirSync(targetNetworkDir, { recursive: true });
 
+    let cookiesSynced = false;
     try {
+      // Try direct file copy first (fastest when Chrome is closed)
       fs.copyFileSync(chromeCookies, targetCookies);
       const chromeJournal = chromeCookies + '-journal';
       if (fs.existsSync(chromeJournal)) {
         fs.copyFileSync(chromeJournal, targetCookies + '-journal');
       }
-      console.log('[SessionSync] ✓ Cookies synced');
+      console.log('[SessionSync] ✓ Cookies synced (direct copy)');
+      cookiesSynced = true;
     } catch (e: any) {
-      if (e.code !== 'EBUSY' && e.code !== 'EACCES') throw e;
-      console.log('[SessionSync] ⊘ Cookies locked (Chrome running)');
+      if (e.code === 'EBUSY' || e.code === 'EACCES') {
+        // Chrome is running, try SQLite read-only mode
+        console.log('[SessionSync] Chrome running, trying SQLite read-only mode...');
+        cookiesSynced = syncCookiesViaSqlite(chromeCookies, targetCookies);
+
+        // If SQLite also fails, try VSS as last resort (requires admin)
+        if (!cookiesSynced && process.platform === 'win32') {
+          console.log('[SessionSync] SQLite failed, trying VSS...');
+          cookiesSynced = trySyncViaVSS(targetProfileDir);
+        }
+      } else {
+        throw e;
+      }
     }
 
     // 2. Sync Local Storage (all - it's a LevelDB, can't filter easily)
@@ -143,7 +277,7 @@ async function syncSessionDataFromChrome(targetProfileDir: string): Promise<bool
     }
 
     console.log('[SessionSync] Session sync complete');
-    return true;
+    return cookiesSynced; // Return true only if cookies were synced
   } catch (error: any) {
     if (error.code === 'EBUSY' || error.code === 'EACCES') {
       console.log('[SessionSync] Chrome is running, partial sync only');
