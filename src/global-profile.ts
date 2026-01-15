@@ -320,6 +320,101 @@ export async function syncAllProfilesFromChrome(): Promise<{ synced: number; fai
   return { synced, failed };
 }
 
+/**
+ * Files to sync between pools for anti-detection.
+ * These make the browser look "lived in" rather than a fresh bot profile.
+ */
+const SYNC_FILES = [
+  // Session data
+  { src: 'Default/Network/Cookies', required: true },
+  { src: 'Local State', required: false },
+  // History (critical for anti-detection - empty history = bot)
+  { src: 'Default/History', required: false },
+  { src: 'Default/Visited Links', required: false },
+  // Autofill and forms
+  { src: 'Default/Web Data', required: false },
+  // Bookmarks
+  { src: 'Default/Bookmarks', required: false },
+  // Preferences (browser settings)
+  { src: 'Default/Preferences', required: false },
+];
+
+/**
+ * Sync session data from one pool to all other pools.
+ * Called automatically when a browser closes.
+ * Syncs cookies, history, and other anti-detection files.
+ * Skips pools that are currently locked (in use).
+ */
+export async function syncPoolToOthers(sourcePoolId: string): Promise<{ synced: number; skipped: number }> {
+  const baseDir = path.join(os.homedir(), '.hydraspecter', 'profiles');
+  const locksDir = path.join(os.homedir(), '.hydraspecter', 'locks');
+
+  const sourceDir = path.join(baseDir, sourcePoolId);
+
+  // Check if source has required files
+  const sourceCookies = path.join(sourceDir, 'Default', 'Network', 'Cookies');
+  if (!fs.existsSync(sourceCookies)) {
+    console.log(`[PoolSync] No cookies in ${sourcePoolId}, skipping sync`);
+    return { synced: 0, skipped: 0 };
+  }
+
+  let synced = 0;
+  let skipped = 0;
+
+  // Get all pools except source
+  const pools = fs.readdirSync(baseDir)
+    .filter(d => d.startsWith('pool-') && d !== sourcePoolId);
+
+  for (const pool of pools) {
+    // Check if pool is locked
+    const lockFile = path.join(locksDir, `${pool}.lock`);
+    if (fs.existsSync(lockFile)) {
+      skipped++;
+      continue;
+    }
+
+    const targetDir = path.join(baseDir, pool);
+
+    try {
+      let filesSynced = 0;
+
+      for (const file of SYNC_FILES) {
+        const srcPath = path.join(sourceDir, file.src);
+        const destPath = path.join(targetDir, file.src);
+
+        if (!fs.existsSync(srcPath)) {
+          if (file.required) {
+            throw new Error(`Required file missing: ${file.src}`);
+          }
+          continue;
+        }
+
+        // Create target directory if needed
+        const destDir = path.dirname(destPath);
+        if (!fs.existsSync(destDir)) {
+          fs.mkdirSync(destDir, { recursive: true });
+        }
+
+        fs.copyFileSync(srcPath, destPath);
+        filesSynced++;
+      }
+
+      if (filesSynced > 0) {
+        synced++;
+      }
+    } catch (error) {
+      console.log(`[PoolSync] Failed to sync to ${pool}: ${error}`);
+      skipped++;
+    }
+  }
+
+  if (synced > 0) {
+    console.log(`[PoolSync] Synced ${sourcePoolId} → ${synced} pools (${skipped} skipped/locked)`);
+  }
+
+  return { synced, skipped };
+}
+
 /** Page metadata */
 export interface PageInfo {
   id: string;
@@ -564,6 +659,11 @@ export class GlobalProfile {
       await this.context.close();
       this.context = null;
       this.pages.clear();
+
+      // Auto-sync cookies to other pools (after browser closes, files are unlocked)
+      if (this.profileId) {
+        await syncPoolToOthers(this.profileId);
+      }
 
       // Release profile back to pool
       if (this.profileId) {

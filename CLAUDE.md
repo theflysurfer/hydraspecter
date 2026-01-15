@@ -68,20 +68,18 @@ Detection triggers automatic level increment. Persists to `~/.hydraspecter/domai
 ## Troubleshooting
 
 ### Not logged in (session not synced)
-Chrome cookies are synced to all 10 pools at startup. If sync fails:
 
-**Option 1: VSS sync (Chrome can stay open)**
-Run as Admin in PowerShell:
+**Chrome v127+ uses App-Bound encryption (v20)** - cookies are tied to Chrome's identity and CANNOT be copied to Chromium/HydraSpecter.
+
+**Solution: Manual login once per site**
+1. Create a browser: `browser({ action: "create", target: "https://notion.so/login" })`
+2. Login manually in the visible HydraSpecter window (pool-0)
+3. Sync to all pools:
 ```powershell
-.\scripts\sync-cookies-vss.ps1
+.\scripts\sync-pools.ps1
 ```
-This uses Windows Shadow Copy to read locked files - works even with Chrome open.
 
-**Option 2: Manual login**
-Login manually in the HydraSpecter browser once - session persists forever in that pool.
-
-**Option 3: Close Chrome briefly**
-Close Chrome → restart Claude Code → sessions auto-sync → reopen Chrome.
+This copies cookies from pool-0 → pool-1 to pool-9. Sessions persist until cookie expiration.
 
 ### Click fails on SPA (React/Vue)
 ```javascript
@@ -108,17 +106,14 @@ Some domains are USELESS without login. The system auto-detects these and warns 
 
 ### How it works:
 1. **10 pools** (pool-0 to pool-9) for concurrent sessions
-2. **At startup**, Chrome cookies are synced to ALL pools
-3. Once logged in to any pool, that session persists forever
+2. Login once on pool-0, then sync to all pools with `.\scripts\sync-pools.ps1`
+3. Sessions persist until cookie expiration
 4. 10 LLMs can run in parallel, each with auth sessions
 
-### If not logged in:
-Login manually once in the HydraSpecter browser - session will persist in that pool.
-
-### Copy session between pools:
-```powershell
-Copy-Item -Path "$env:USERPROFILE\.hydraspecter\profiles\pool-1\*" -Destination "$env:USERPROFILE\.hydraspecter\profiles\pool-0\" -Recurse -Force
-```
+### First-time setup per site:
+1. `browser({ action: "create", target: "https://site.com/login" })`
+2. Login in the visible browser window
+3. Close browser, run `.\scripts\sync-pools.ps1`
 
 ### Common mistakes:
 - ❌ `browser({ action: "create", target: "https://notion.so" })` → Redirects to marketing page

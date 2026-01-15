@@ -93,7 +93,8 @@ try {
     if ($pools.Count -eq 0) {
         Write-Host "Creating default pools..." -ForegroundColor Cyan
         for ($i = 0; $i -lt 10; $i++) {
-            New-Item -ItemType Directory -Path "$TargetDir\pool-$i\Network" -Force | Out-Null
+            # Chromium expects cookies in Default/Network/Cookies
+            New-Item -ItemType Directory -Path "$TargetDir\pool-$i\Default\Network" -Force | Out-Null
         }
         $pools = Get-ChildItem -Path $TargetDir -Directory -Filter "pool-*"
     }
@@ -105,7 +106,8 @@ try {
             continue
         }
 
-        $targetPath = Join-Path $pool.FullName "Network\Cookies"
+        # IMPORTANT: Chromium uses Default/Network/Cookies, not Network/Cookies at root
+        $targetPath = Join-Path $pool.FullName "Default\Network\Cookies"
         $targetNetworkDir = Split-Path $targetPath
 
         if (-not (Test-Path $targetNetworkDir)) {
@@ -124,6 +126,37 @@ try {
 
     Write-Host ""
     Write-Host "Done! $synced pools synced." -ForegroundColor Green
+
+    # Also sync the os_crypt encryption key from Chrome's Local State
+    Write-Host ""
+    Write-Host "Syncing encryption key (os_crypt)..." -ForegroundColor Cyan
+
+    $chromeLocalStatePath = "$env:LOCALAPPDATA\Google\Chrome\User Data\Local State"
+    $shadowLocalStatePath = "$MountPoint\Users\$env:USERNAME\AppData\Local\Google\Chrome\User Data\Local State"
+
+    if (Test-Path $shadowLocalStatePath) {
+        $chromeLocalState = Get-Content $shadowLocalStatePath -Raw | ConvertFrom-Json
+        $chromeOsCrypt = $chromeLocalState.os_crypt
+
+        foreach ($pool in $pools) {
+            if ($pool.Name -notmatch '^pool-\d$') { continue }
+
+            $poolLocalStatePath = Join-Path $pool.FullName "Local State"
+            if (Test-Path $poolLocalStatePath) {
+                try {
+                    $poolLocalState = Get-Content $poolLocalStatePath -Raw | ConvertFrom-Json
+                    # Update os_crypt with Chrome's keys
+                    $poolLocalState.os_crypt = $chromeOsCrypt
+                    $poolLocalState | ConvertTo-Json -Depth 10 -Compress | Set-Content $poolLocalStatePath -Force
+                    Write-Host "  OK $($pool.Name) os_crypt synced" -ForegroundColor Green
+                } catch {
+                    Write-Host "  FAIL $($pool.Name): $($_.Exception.Message)" -ForegroundColor Red
+                }
+            }
+        }
+    } else {
+        Write-Host "Chrome Local State not found in shadow copy" -ForegroundColor Yellow
+    }
 
 } finally {
     # Cleanup: remove mount point
