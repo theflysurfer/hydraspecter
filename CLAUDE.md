@@ -28,6 +28,51 @@ browser_create({ mode: "isolated", device: "iPhone 14" })
 browser_create({ mode: "isolated", browserType: "firefox" })
 ```
 
+## Device Emulation (Mobile/Tablet Testing)
+
+Test responsive design across **90+ real devices** with accurate viewport, user agent, and touch emulation.
+
+### Quick Examples
+```javascript
+// iPhone
+browser({ action: "create", options: { mode: "isolated", device: "iPhone 15 Pro" } })
+
+// Android
+browser({ action: "create", options: { mode: "isolated", device: "Pixel 7" } })
+
+// Tablet
+browser({ action: "create", options: { mode: "isolated", device: "iPad Pro 11" } })
+
+// Landscape mode
+browser({ action: "create", options: { mode: "isolated", device: "iPhone 14 landscape" } })
+```
+
+### Available Devices
+
+| Category | Count | Examples |
+|----------|-------|----------|
+| **iPhone** | 56 | iPhone 6 → 15 Pro Max (+ landscape) |
+| **iPad** | 10 | iPad Mini, Pro 11, Gen 5-7 |
+| **Pixel** | 14 | Pixel 2 → 7 |
+| **Galaxy** | 14 | Galaxy S5 → S9+, Tab S4 |
+
+### List & Filter Devices
+```javascript
+// List all devices
+browser({ action: "devices" })
+
+// Filter by name
+browser({ action: "devices", options: { filter: "iphone" } })
+browser({ action: "devices", options: { filter: "ipad" } })
+browser({ action: "devices", options: { filter: "pixel" } })
+```
+
+### Device Config Includes
+- **Viewport**: Exact screen dimensions
+- **User Agent**: Authentic mobile UA string
+- **Touch**: Touch events enabled
+- **Mobile mode**: Mobile browser behavior
+
 ## Protection Levels (Auto-learned)
 
 | Level | Humanize | Headless | Delays |
