@@ -120,6 +120,7 @@ export class MetaTool {
 • Wait: wait_element, wait_navigation, wait_request
 • Debug: enable_network, network, enable_console, console
 • Endpoints: capture, list_endpoints, save_endpoint, get_endpoint
+• Devices: devices (list 90+ devices for mobile/tablet emulation)
 • Advanced: evaluate, batch, protection
 
 **Auth-Required Sites (Notion, Gmail, etc.):**
@@ -143,6 +144,14 @@ Sessions persist across all pools. Just use direct workspace URLs:
 • Screenshot: { action: "screenshot", pageId: "abc", options: { fullPage: true } }
 • Scroll: { action: "scroll", pageId: "abc", options: { direction: "down" } }
 • Close: { action: "close", pageId: "abc" }
+
+**Device Emulation (90+ devices):**
+• List devices: { action: "devices" }
+• Filter devices: { action: "devices", options: { filter: "iphone" } }
+• iPhone: { action: "create", options: { mode: "isolated", device: "iPhone 15 Pro" } }
+• iPad: { action: "create", options: { mode: "isolated", device: "iPad Pro 11" } }
+• Android: { action: "create", options: { mode: "isolated", device: "Pixel 7" } }
+• Landscape: { action: "create", options: { mode: "isolated", device: "iPhone 14 landscape" } }
 
 **Network Capture (important options):**
 • Enable: { action: "enable_network", pageId: "abc" }
