@@ -6,7 +6,12 @@ import { getProfilePool, ProfilePool, ProfileStatus } from './profile-pool.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 // Enable stealth mode but disable navigator.webdriver evasion
 // (it adds --disable-blink-features=AutomationControlled which causes Chrome warning)
@@ -54,7 +59,7 @@ function copyDirSync(src: string, dest: string): void {
  */
 function trySyncViaVSS(targetProfileDir: string): boolean {
   try {
-    const { execSync } = require('child_process');
+    // Get script path relative to this file (dist/ → scripts/)
     const scriptPath = path.join(__dirname, '..', 'scripts', 'sync-cookies-vss.ps1');
 
     // Check if script exists
