@@ -6,6 +6,7 @@ import { BrowserInstance, BrowserConfig, ServerConfig, ToolResult } from './type
 import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as net from 'net';
 
 // Enable stealth mode but disable navigator.webdriver evasion
 // (it adds --disable-blink-features=AutomationControlled which causes Chrome warning)
@@ -121,7 +122,6 @@ export class BrowserManager {
     try {
       // Simple port detection to avoid network request complexity
       const url = new URL(proxyUrl);
-      const net = require('net');
       
       return new Promise((resolve) => {
         const socket = new net.Socket();
