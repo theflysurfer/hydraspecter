@@ -125,12 +125,15 @@ export class ConcurrentBrowserServer {
   }
 
   async run() {
-    // Sync Chrome sessions to all pools at startup
-    await syncAllProfilesFromChrome();
-
+    // Connect MCP transport FIRST (non-blocking startup)
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     console.error('HydraSpecter MCP Server started');
+
+    // Sync Chrome sessions in background (don't block MCP handshake)
+    syncAllProfilesFromChrome().catch(err => {
+      console.error('[SyncAll] Background sync failed:', err.message);
+    });
   }
 
   async shutdown() {
