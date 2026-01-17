@@ -13,12 +13,16 @@ import Database from 'better-sqlite3';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Enable stealth mode but disable navigator.webdriver evasion
-// (it adds --disable-blink-features=AutomationControlled which causes Chrome warning)
-// We'll use JavaScript injection instead (see addInitScript below)
-const stealthPlugin = StealthPlugin();
-stealthPlugin.enabledEvasions.delete('navigator.webdriver');
-chromiumExtra.use(stealthPlugin);
+// Stealth plugin lazy initialization to avoid module-level side effects
+// which was causing MCP server to stop responding
+let stealthInitialized = false;
+function initStealth() {
+  if (stealthInitialized) return;
+  const stealthPlugin = StealthPlugin();
+  stealthPlugin.enabledEvasions.delete('navigator.webdriver');
+  chromiumExtra.use(stealthPlugin);
+  stealthInitialized = true;
+}
 
 // Critical domains that need session data (cookies + localStorage + IndexedDB)
 const CRITICAL_DOMAINS = [
@@ -526,6 +530,9 @@ export class GlobalProfile {
       launchOptions.channel = this.channel;
       console.error(`[GlobalProfile] Using browser channel: ${this.channel}`);
     }
+
+    // Initialize stealth plugin on first use (lazy init to avoid module-level side effects)
+    initStealth();
 
     this.context = await chromiumExtra.launchPersistentContext(this.profileDir, launchOptions);
 

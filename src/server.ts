@@ -130,13 +130,13 @@ export class ConcurrentBrowserServer {
     await this.server.connect(transport);
     console.error('HydraSpecter MCP Server started');
 
-    // Sync Chrome sessions in background (don't block MCP handshake)
-    // Wrapped in setTimeout to ensure MCP transport is fully ready
+    // Sync Chrome sessions in background after a delay
+    // The delay ensures MCP transport is fully ready before any sync I/O
     setTimeout(() => {
       syncAllProfilesFromChrome().catch(err => {
         console.error('[SyncAll] Background sync failed:', err.message);
       });
-    }, 100);
+    }, 1000);
   }
 
   async shutdown() {

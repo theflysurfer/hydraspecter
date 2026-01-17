@@ -12,6 +12,7 @@
     "dev": "tsc --watch",
     "start": "node dist/index.js",
     "test": "vitest",
+    "test:mcp": "node tests/test-mcp.cjs",
     "test:proxy": "node test-proxy.js",
     "benchmark": "node benchmark/run-benchmark.js",
     "prepare": "npm run build"

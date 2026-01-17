@@ -8,11 +8,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as net from 'net';
 
-// Enable stealth mode but disable navigator.webdriver evasion
-// (it adds --disable-blink-features=AutomationControlled which causes Chrome warning)
-const stealthPlugin = StealthPlugin();
-stealthPlugin.enabledEvasions.delete('navigator.webdriver');
-chromiumExtra.use(stealthPlugin);
+// Stealth plugin initialization moved to a single place to avoid double-registration
+// which was causing MCP server to stop responding
+let stealthInitialized = false;
+function initStealth() {
+  if (stealthInitialized) return;
+  const stealthPlugin = StealthPlugin();
+  stealthPlugin.enabledEvasions.delete('navigator.webdriver');
+  chromiumExtra.use(stealthPlugin);
+  stealthInitialized = true;
+}
 
 export class BrowserManager {
   private instances: Map<string, BrowserInstance> = new Map();
@@ -474,6 +479,9 @@ export class BrowserManager {
 
     console.error(`Launching persistent context with userDataDir: ${config.userDataDir}`);
 
+    // Initialize stealth plugin on first use (lazy init to avoid module-level side effects)
+    initStealth();
+
     // launchPersistentContext returns a BrowserContext directly (not a Browser)
     const context = await chromiumExtra.launchPersistentContext(config.userDataDir, {
       ...launchOptions,
@@ -511,6 +519,7 @@ export class BrowserManager {
     switch (config.browserType) {
       case 'chromium':
         // Use playwright-extra with stealth plugin to avoid bot detection
+        initStealth();
         const channelInfo = config.channel ? ` (channel: ${config.channel})` : '';
         console.error(`Launching Chromium with enhanced stealth mode${channelInfo}`);
         return await chromiumExtra.launch(launchOptions);
