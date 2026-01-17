@@ -3,6 +3,7 @@ import { chromium as chromiumExtra } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { v4 as uuidv4 } from 'uuid';
 import { getProfilePool, ProfilePool, ProfileStatus } from './profile-pool.js';
+import { getStealthInitScript } from './utils/stealth-scripts.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -19,7 +20,8 @@ let stealthInitialized = false;
 function initStealth() {
   if (stealthInitialized) return;
   const stealthPlugin = StealthPlugin();
-  stealthPlugin.enabledEvasions.delete('navigator.webdriver');
+  // Enable ALL evasions for maximum anti-detection (don't delete any!)
+  // The plugin handles: webdriver, webgl.vendor, chrome.runtime, navigator.plugins, etc.
   chromiumExtra.use(stealthPlugin);
   stealthInitialized = true;
 }
@@ -509,6 +511,7 @@ export class GlobalProfile {
       ignoreDefaultArgs: ['--enable-automation'],
       args: [
         '--disable-infobars',
+        '--test-type',  // Suppresses "unsupported command-line flag" warning banner
         '--disable-dev-shm-usage',
         '--no-first-run',
         '--no-default-browser-check',
@@ -536,13 +539,8 @@ export class GlobalProfile {
 
     this.context = await chromiumExtra.launchPersistentContext(this.profileDir, launchOptions);
 
-    // Hide navigator.webdriver via JavaScript injection (replaces the Chrome flag that caused warning)
-    await this.context.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', {
-        get: () => false,
-        configurable: true
-      });
-    });
+    // Apply comprehensive anti-detection patches (Cloudflare Turnstile, DataDome, etc.)
+    await this.context.addInitScript(getStealthInitScript());
 
     // Handle context close
     this.context.on('close', () => {

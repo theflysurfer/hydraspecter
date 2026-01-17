@@ -73,10 +73,10 @@ foreach ($i in $TargetPools) {
         }
 
         $size = [math]::Round((Get-Item (Join-Path $targetDir "Default\Network\Cookies")).Length / 1KB)
-        Write-Host "  OK pool-$i ($size KB, $fileCount files)" -ForegroundColor Green
+        Write-Host "  OK pool-${i} ($size KB, $fileCount files)" -ForegroundColor Green
         $synced++
     } catch {
-        Write-Host "  FAIL pool-$i: $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "  FAIL pool-${i}: $($_.Exception.Message)" -ForegroundColor Red
     }
 }
 

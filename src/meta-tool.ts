@@ -81,6 +81,15 @@ const ACTION_MAP: Record<string, string> = {
   'delete_endpoint': 'browser_delete_endpoint',
   'capture_endpoint': 'browser_capture_from_network',
   'capture': 'browser_capture_from_network',
+
+  // Anti-detection / CAPTCHA handling
+  'solve_turnstile': 'browser_solve_turnstile',
+  'turnstile': 'browser_solve_turnstile',
+  'solve_captcha': 'browser_solve_turnstile',  // Generic alias
+
+  // Session management (State Injection pattern)
+  'load_session': 'browser_load_session',
+  'list_sessions': 'browser_list_sessions',
 };
 
 // Actions grouped by category for help (used in tool description)
@@ -121,6 +130,7 @@ export class MetaTool {
 • Debug: enable_network, network, enable_console, console
 • Endpoints: capture, list_endpoints, save_endpoint, get_endpoint
 • Devices: devices (list 90+ devices for mobile/tablet emulation)
+• Anti-detection: solve_turnstile (Cloudflare Turnstile auto-click)
 • Advanced: evaluate, batch, protection
 
 **Auth-Required Sites (Notion, Gmail, etc.):**
@@ -157,7 +167,14 @@ Sessions persist across all pools. Just use direct workspace URLs:
 • Enable: { action: "enable_network", pageId: "abc" }
 • Get logs: { action: "network", pageId: "abc", options: { urlPattern: "api/save", limit: 10 } }
 • Wait for request: { action: "wait_request", pageId: "abc", options: { urlPattern: "saveTransaction", timeout: 5000 } }
-• Capture endpoint: { action: "capture", pageId: "abc", options: { urlPattern: "api/cart" } }`,
+• Capture endpoint: { action: "capture", pageId: "abc", options: { urlPattern: "api/cart" } }
+
+**Backend Selection (Cloudflare bypass):**
+• playwright (default): Full features, network interception, ARIA tree
+• seleniumbase: Cloudflare/Turnstile bypass, limited features
+• auto: Try playwright, fallback to seleniumbase if blocked
+• Example: { action: "create", target: "https://chatgpt.com", options: { backend: "seleniumbase" } }
+• Note: SeleniumBase requires Python + pip install seleniumbase`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -273,8 +290,13 @@ Sessions persist across all pools. Just use direct workspace URLs:
         break;
 
       case 'browser_evaluate':
+        // Support multiple ways to specify the script: target, text, or options.expression
         if (target) result['script'] = target;
         if (text) result['script'] = text;
+        if (result['expression']) {
+          result['script'] = result['expression'];
+          delete result['expression'];
+        }
         break;
 
       case 'browser_set_protection_level':

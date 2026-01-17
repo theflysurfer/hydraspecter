@@ -3,6 +3,7 @@ import { chromium as chromiumExtra } from 'playwright-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import { v4 as uuidv4 } from 'uuid';
 import { BrowserInstance, BrowserConfig, ServerConfig, ToolResult } from './types.js';
+import { getStealthInitScript } from './utils/stealth-scripts.js';
 import { execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -14,7 +15,8 @@ let stealthInitialized = false;
 function initStealth() {
   if (stealthInitialized) return;
   const stealthPlugin = StealthPlugin();
-  stealthPlugin.enabledEvasions.delete('navigator.webdriver');
+  // Enable ALL evasions for maximum anti-detection (don't delete any!)
+  // The plugin handles: webdriver, webgl.vendor, chrome.runtime, navigator.plugins, etc.
   chromiumExtra.use(stealthPlugin);
   stealthInitialized = true;
 }
@@ -242,13 +244,8 @@ export class BrowserManager {
 
         context = await browser.newContext(contextOptions);
 
-        // Hide navigator.webdriver via JavaScript injection
-        await context.addInitScript(() => {
-          Object.defineProperty(navigator, 'webdriver', {
-            get: () => false,
-            configurable: true
-          });
-        });
+        // Apply comprehensive anti-detection patches
+        await context.addInitScript(getStealthInitScript());
 
         page = await context.newPage();
       }
@@ -428,6 +425,7 @@ export class BrowserManager {
       // Comprehensive anti-detection flags
       args: [
         '--disable-infobars',  // Hides "Chrome is being controlled" banner
+        '--test-type',  // Suppresses "unsupported command-line flag" warning banner
         '--disable-dev-shm-usage',  // Improves stability
         '--no-first-run',  // Prevents first-run dialogs
         '--no-default-browser-check',  // Skips default browser check
@@ -490,13 +488,8 @@ export class BrowserManager {
       bypassCSP: config.contextOptions?.bypassCSP,
     });
 
-    // Hide navigator.webdriver via JavaScript injection
-    await context.addInitScript(() => {
-      Object.defineProperty(navigator, 'webdriver', {
-        get: () => false,
-        configurable: true
-      });
-    });
+    // Apply comprehensive anti-detection patches
+    await context.addInitScript(getStealthInitScript());
 
     // Get or create a page
     const pages = context.pages();

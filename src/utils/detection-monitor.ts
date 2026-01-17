@@ -58,6 +58,10 @@ const DEFAULT_CONFIG: DetectionConfig = {
     'amazon.com',
     'amazon.fr',
     'cloudflare.com',
+    'chatgpt.com',      // OpenAI - Cloudflare Turnstile
+    'openai.com',       // OpenAI API/Dashboard
+    'claude.ai',        // Anthropic
+    'perplexity.ai',    // Perplexity
   ],
 };
 

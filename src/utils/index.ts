@@ -10,3 +10,10 @@ export * from './bezier.js';
 export * from './ghost-cursor.js';
 export * from './human-typing.js';
 export * from './human-scroll.js';
+
+// Anti-detection
+export * from './stealth-scripts.js';
+export * from './turnstile-handler.js';
+
+// Process management
+export * from './process-cleanup.js';

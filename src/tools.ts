@@ -15,6 +15,20 @@ import {
   HumanizeMode,
   RateLimitConfig
 } from './types.js';
+import {
+  BackendType,
+  detectCloudflareBlock,
+} from './browser-adapter.js';
+import {
+  SeleniumBaseInstance,
+  createSeleniumBaseInstance,
+  isSeleniumBaseAvailable
+} from './backends/seleniumbase-driver.js';
+import {
+  SeleniumBaseHttpInstance,
+  createSeleniumBaseHttpInstance,
+  isSeleniumBaseHttpAvailable
+} from './backends/seleniumbase-http-driver.js';
 
 /** Console log entry */
 interface ConsoleLogEntry {
@@ -83,11 +97,11 @@ function normalizeSelector(selector: string): string {
     (_, n) => `:nth-child(${parseInt(n) + 1})`
   );
 
-  // Transform :first to :first-child
-  normalized = normalized.replace(/:first\b/g, ':first-child');
+  // Transform :first to :first-child (but NOT :first-of-type, :first-letter, etc.)
+  normalized = normalized.replace(/:first(?!-)/g, ':first-child');
 
-  // Transform :last to :last-child
-  normalized = normalized.replace(/:last\b/g, ':last-child');
+  // Transform :last to :last-child (but NOT :last-of-type, etc.)
+  normalized = normalized.replace(/:last(?!-)/g, ':last-child');
 
   // Log transformation if changed
   if (normalized !== selector) {
@@ -95,6 +109,61 @@ function normalizeSelector(selector: string): string {
   }
 
   return normalized;
+}
+
+/**
+ * Translate Playwright-specific selectors to SeleniumBase-compatible selectors.
+ * SeleniumBase uses standard CSS selectors and XPath, not Playwright's custom locators.
+ *
+ * Playwright-specific patterns that need translation:
+ * - text=Foo → XPath: //*[contains(text(), "Foo")]
+ * - :has-text("Foo") → XPath with contains
+ * - button:has-text("Foo") → XPath: //button[contains(., "Foo")]
+ */
+function translateSelectorForSeleniumBase(selector: string): { selector: string; type: 'css' | 'xpath' | 'link_text' } {
+  if (!selector) return { selector, type: 'css' };
+
+  // Handle text= locator (Playwright-specific)
+  // text=Foo or text="Foo" → XPath //*[contains(text(), "Foo")]
+  // Using XPath instead of link_text because link_text only works for <a> elements
+  const textMatch = selector.match(/^text=["']?([^"']+)["']?$/i);
+  if (textMatch && textMatch[1]) {
+    const text = textMatch[1];
+    // Use XPath contains() which works for any element type (button, span, div, a, etc.)
+    return { selector: `//*[contains(text(), "${text}")]`, type: 'xpath' };
+  }
+
+  // Handle :has-text() pseudo-selector (Playwright-specific)
+  // button:has-text("Foo") → //button[contains(., "Foo")]
+  // :has-text("Foo") → //*[contains(., "Foo")]
+  const hasTextMatch = selector.match(/^([a-z0-9*]*):has-text\(["']([^"']+)["']\)$/i);
+  if (hasTextMatch && hasTextMatch[2]) {
+    const tag = hasTextMatch[1] || '*';
+    const text = hasTextMatch[2];
+    return { selector: `//${tag}[contains(., "${text}")]`, type: 'xpath' };
+  }
+
+  // Handle role= locator (Playwright-specific)
+  // role=button → CSS: [role="button"]
+  const roleMatch = selector.match(/^role=([a-z]+)$/i);
+  if (roleMatch) {
+    return { selector: `[role="${roleMatch[1]}"]`, type: 'css' };
+  }
+
+  // Handle data-testid= shorthand
+  // data-testid=foo → CSS: [data-testid="foo"]
+  const testIdMatch = selector.match(/^data-testid=([a-z0-9-_]+)$/i);
+  if (testIdMatch) {
+    return { selector: `[data-testid="${testIdMatch[1]}"]`, type: 'css' };
+  }
+
+  // Check if it looks like XPath (starts with / or //)
+  if (selector.startsWith('/') || selector.startsWith('(')) {
+    return { selector, type: 'xpath' };
+  }
+
+  // Default: assume it's CSS
+  return { selector, type: 'css' };
 }
 
 export class BrowserTools {
@@ -118,6 +187,10 @@ export class BrowserTools {
   private networkMonitoringEnabled: Set<string> = new Set();
   // Downloads storage per instance/page
   private downloads: Map<string, DownloadEntry[]> = new Map();
+  // SeleniumBase instances storage (for Cloudflare bypass)
+  private seleniumBaseInstances: Map<string, SeleniumBaseInstance | SeleniumBaseHttpInstance> = new Map();
+  // SeleniumBase availability cache
+  private seleniumBaseAvailable: boolean | null = null;
 
   constructor(
     private browserManager: BrowserManager,
@@ -450,6 +523,12 @@ Returns id to use with other browser_* tools.`,
               description: 'Browser mode (default: persistent)',
               default: 'persistent'
             },
+            backend: {
+              type: 'string',
+              enum: ['playwright', 'seleniumbase', 'auto'],
+              description: 'Browser backend: playwright (default, full features), seleniumbase (Cloudflare bypass), auto (try playwright, fallback to seleniumbase if blocked)',
+              default: 'playwright'
+            },
             // Options for isolated mode only
             browserType: {
               type: 'string',
@@ -509,6 +588,7 @@ Returns id to use with other browser_* tools.`,
           properties: {
             id: { type: 'string', description: 'Unique identifier - use this as instanceId in other tools' },
             mode: { type: 'string', description: 'Browser mode: persistent/incognito/isolated' },
+            backend: { type: 'string', description: 'Browser backend: playwright (full features) or seleniumbase (Cloudflare bypass)' },
             url: { type: 'string' },
             browserType: { type: 'string', description: 'Browser engine (isolated mode only)' },
             protectionLevel: { type: 'number', description: 'Current protection level 0-3 (persistent/incognito modes)' },
@@ -520,9 +600,14 @@ Returns id to use with other browser_* tools.`,
               }
             },
             profileDir: { type: 'string', description: 'Path to persistent profile (persistent mode only)' },
-            createdAt: { type: 'string', description: 'ISO timestamp' }
+            createdAt: { type: 'string', description: 'ISO timestamp' },
+            limitations: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Features not available with current backend (seleniumbase only)'
+            }
           },
-          required: ['id', 'mode']
+          required: ['id', 'mode', 'backend']
         }
       },
       {
@@ -2048,7 +2133,15 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             'slack.com', 'discord.com'
           ];
 
+          // Cloudflare-protected domains (recommend SeleniumBase)
+          const cloudflareProtectedDomains = [
+            'chatgpt.com', 'openai.com',
+            'claude.ai', 'anthropic.com',
+            'perplexity.ai'
+          ];
+
           let mode = args.mode || 'persistent';
+          let backend: BackendType = args.backend || 'playwright';
 
           // Override to persistent if URL matches session-required domain
           if (args.url && mode !== 'isolated') {
@@ -2063,11 +2156,99 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 console.error(`[AUTO] Detected session-required site (${hostname}), using persistent mode instead of incognito`);
                 mode = 'persistent';
               }
+
+              // Auto-suggest SeleniumBase for Cloudflare-protected sites
+              if (backend === 'auto') {
+                const isCloudflareProtected = cloudflareProtectedDomains.some(domain =>
+                  hostname === domain || hostname.endsWith('.' + domain)
+                );
+                if (isCloudflareProtected) {
+                  console.error(`[AUTO] Detected Cloudflare-protected site (${hostname}), will try SeleniumBase`);
+                }
+              }
             } catch {
               // Invalid URL, keep original mode
             }
           }
 
+          // Handle SeleniumBase backend
+          if (backend === 'seleniumbase') {
+            result = await this.createSeleniumBasePage(args.url, args.headless);
+            break;
+          }
+
+          // Handle auto backend - try Playwright first, fallback to SeleniumBase if blocked
+          if (backend === 'auto' && args.url) {
+            // First try with Playwright
+            const globalMode = mode === 'incognito' ? 'incognito' : 'session';
+            result = await this.createGlobalPage(args.url, globalMode);
+
+            if (result.success && result.data?.pageId) {
+              const page = this.globalPages.get(result.data.pageId);
+              if (page) {
+                // Check for Cloudflare block
+                const detection = await detectCloudflareBlock({
+                  backend: 'playwright',
+                  goto: async () => {},
+                  goBack: async () => {},
+                  goForward: async () => {},
+                  reload: async () => {},
+                  click: async () => {},
+                  type: async () => {},
+                  fill: async () => {},
+                  scroll: async () => {},
+                  waitForSelector: async () => {},
+                  evaluate: async <R>() => undefined as R,
+                  screenshot: async () => Buffer.from(''),
+                  title: () => page.title(),
+                  url: () => page.url(),
+                  content: () => page.content(),
+                  getInfo: async () => ({ url: page.url(), title: await page.title() }),
+                  close: async () => {},
+                  isClosed: () => page.isClosed(),
+                  supportsFeature: () => true,
+                });
+
+                if (detection.blocked && detection.confidence > 0.7) {
+                  console.error(`[AUTO] Cloudflare block detected (${detection.challengeType}, confidence: ${detection.confidence}), falling back to SeleniumBase`);
+
+                  // Close the Playwright page
+                  await this.globalProfile.closePage(result.data.pageId);
+                  this.globalPages.delete(result.data.pageId);
+
+                  // Try SeleniumBase
+                  result = await this.createSeleniumBasePage(args.url, args.headless);
+                  break;
+                }
+
+                // No block detected, continue with Playwright
+                if (args.enableConsoleCapture) {
+                  this.setupConsoleCapture(result.data.pageId, page);
+                }
+                if (args.enableNetworkMonitoring) {
+                  this.setupNetworkMonitoring(result.data.pageId, page);
+                }
+                this.setupDownloadHandling(result.data.pageId, page);
+              }
+            }
+
+            // Transform output to match new schema
+            if (result.success && result.data) {
+              result.data = {
+                id: result.data.pageId,
+                mode: mode,
+                backend: 'playwright',
+                url: result.data.url,
+                protectionLevel: result.data.protectionLevel,
+                settings: result.data.settings,
+                profileDir: result.data.profileDir,
+                createdAt: new Date().toISOString()
+              };
+            }
+            break;
+          }
+
+          // Default Playwright backend
           if (mode === 'isolated') {
             // Isolated mode: use BrowserManager (separate instance)
             let viewport = args.viewport || { width: 1280, height: 720 };
@@ -2121,6 +2302,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               result.data = {
                 id: result.data.instanceId,
                 mode: 'isolated',
+                backend: 'playwright',
                 browserType: result.data.browserType,
                 createdAt: result.data.createdAt
               };
@@ -2149,6 +2331,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               result.data = {
                 id: result.data.pageId,
                 mode: mode,
+                backend: 'playwright',
                 url: result.data.url,
                 protectionLevel: result.data.protectionLevel,
                 settings: result.data.settings,
@@ -2161,7 +2344,31 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         }
 
         case 'browser_save_session': {
-          // Check if it's a GlobalProfile page first
+          // Check if it's a SeleniumBase instance (State Injection pattern)
+          const seleniumInstance = this.seleniumBaseInstances.get(args.instanceId);
+          if (seleniumInstance) {
+            try {
+              const filePath = await seleniumInstance.saveSession(args.domain);
+              result = {
+                success: true,
+                data: {
+                  saved: true,
+                  filePath,
+                  domain: args.domain || 'auto-detected',
+                  backend: 'seleniumbase',
+                  note: 'Session saved. Will be auto-loaded on next browser creation for this domain.'
+                }
+              };
+            } catch (error) {
+              result = {
+                success: false,
+                error: `Save session failed: ${error instanceof Error ? error.message : error}`
+              };
+            }
+            break;
+          }
+
+          // Check if it's a GlobalProfile page
           const globalPage = this.globalPages.get(args.instanceId);
           if (globalPage) {
             // Save from GlobalProfile page context
@@ -2245,6 +2452,19 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
         // Console logs
         case 'browser_enable_console_capture': {
+          // SeleniumBase does not support console capture
+          if (this.seleniumBaseInstances.has(args.instanceId)) {
+            result = {
+              success: false,
+              error: 'Console capture is not supported with SeleniumBase backend',
+              data: {
+                backend: 'seleniumbase',
+                suggestion: 'Use Playwright backend for console capture: browser_create({ backend: "playwright" })',
+                alternative: 'Use browser_evaluate to manually collect console.log outputs'
+              }
+            };
+            break;
+          }
           const page = await this.getPage(args.instanceId);
           if (!page) {
             result = { success: false, error: `Instance ${args.instanceId} not found` };
@@ -2256,6 +2476,18 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         }
 
         case 'browser_get_console_logs': {
+          // SeleniumBase does not support console capture
+          if (this.seleniumBaseInstances.has(args.instanceId)) {
+            result = {
+              success: false,
+              error: 'Console logs are not available with SeleniumBase backend',
+              data: {
+                backend: 'seleniumbase',
+                suggestion: 'Use Playwright backend for console logs: browser_create({ backend: "playwright" })'
+              }
+            };
+            break;
+          }
           let logs = this.consoleLogs.get(args.instanceId) || [];
 
           // Filter by type
@@ -2294,6 +2526,19 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
         // Network monitoring
         case 'browser_enable_network_monitoring': {
+          // SeleniumBase does not support network interception
+          if (this.seleniumBaseInstances.has(args.instanceId)) {
+            result = {
+              success: false,
+              error: 'Network monitoring is not supported with SeleniumBase backend',
+              data: {
+                backend: 'seleniumbase',
+                suggestion: 'Use Playwright backend for network interception: browser_create({ backend: "playwright" })',
+                alternative: 'Use browser_evaluate to check for XHR responses via window.performance API'
+              }
+            };
+            break;
+          }
           const page = await this.getPage(args.instanceId);
           if (!page) {
             result = { success: false, error: `Instance ${args.instanceId} not found` };
@@ -2305,6 +2550,19 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         }
 
         case 'browser_get_network_logs': {
+          // SeleniumBase does not support network interception
+          if (this.seleniumBaseInstances.has(args.instanceId)) {
+            result = {
+              success: false,
+              error: 'Network logs are not available with SeleniumBase backend',
+              data: {
+                backend: 'seleniumbase',
+                suggestion: 'Use Playwright backend for network monitoring: browser_create({ backend: "playwright" })',
+                alternative: 'Use browser_evaluate to access window.performance.getEntries() for basic network timing'
+              }
+            };
+            break;
+          }
           let logs = this.networkLogs.get(args.instanceId) || [];
 
           // Filter by resource type
@@ -2543,13 +2801,41 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           break;
         }
 
-        case 'browser_list_instances':
-          result = this.browserManager.listInstances();
+        case 'browser_list_instances': {
+          const playwrightResult = this.browserManager.listInstances();
+
+          // Add SeleniumBase instances to the list
+          const seleniumInstances = Array.from(this.seleniumBaseInstances.entries()).map(([id, instance]) => ({
+            id,
+            createdAt: instance.createdAt.toISOString(),
+            lastUsed: instance.createdAt.toISOString(), // SeleniumBase doesn't track last used
+            isActive: true,
+            backend: 'seleniumbase',
+            metadata: {}
+          }));
+
+          result = {
+            success: true,
+            data: {
+              instances: [
+                ...(playwrightResult.data?.instances || []).map((i: any) => ({ ...i, backend: 'playwright' })),
+                ...seleniumInstances
+              ],
+              totalCount: (playwrightResult.data?.instances?.length || 0) + seleniumInstances.length,
+              seleniumBaseCount: seleniumInstances.length,
+              maxInstances: playwrightResult.data?.maxInstances || 5
+            }
+          };
           break;
+        }
 
         case 'browser_close_instance':
-          // Check if it's a global page or incognito first
-          if (this.globalPages.has(args.instanceId)) {
+          // Check if it's a SeleniumBase instance first
+          if (this.seleniumBaseInstances.has(args.instanceId)) {
+            result = await this.closeSeleniumBaseInstance(args.instanceId);
+          }
+          // Check if it's a global page or incognito
+          else if (this.globalPages.has(args.instanceId)) {
             const page = this.globalPages.get(args.instanceId)!;
             await page.close();
             this.globalPages.delete(args.instanceId);
@@ -2782,6 +3068,19 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         }
 
         case 'browser_capture_from_network': {
+          // SeleniumBase does not support network interception
+          if (this.seleniumBaseInstances.has(args.instanceId)) {
+            result = {
+              success: false,
+              error: 'Endpoint capture is not available with SeleniumBase backend',
+              data: {
+                backend: 'seleniumbase',
+                suggestion: 'Use Playwright backend for network capture: browser_create({ backend: "playwright" })',
+                alternative: 'Manually inspect API calls using browser DevTools and use browser_save_endpoint'
+              }
+            };
+            break;
+          }
           const bookmarks = getApiBookmarks();
 
           // Get network logs for the instance
@@ -2878,6 +3177,113 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               created
             }
           };
+          break;
+        }
+
+        case 'browser_solve_turnstile': {
+          const pageResult = this.getPageFromId(args.instanceId);
+          if (!pageResult) {
+            result = { success: false, error: `Instance/Page ${args.instanceId} not found` };
+            break;
+          }
+
+          const { clickTurnstile, detectTurnstile } = await import('./utils/turnstile-handler.js');
+
+          // First detect
+          const detection = await detectTurnstile(pageResult.page);
+          if (!detection.detected) {
+            result = {
+              success: false,
+              error: 'Cloudflare Turnstile not detected on this page',
+              data: { suggestion: 'Use browser_screenshot to verify Turnstile is visible' }
+            };
+            break;
+          }
+
+          // Attempt to click/solve
+          const turnstileResult = await clickTurnstile(pageResult.page, {
+            humanize: args.humanize !== false,
+            maxAttempts: args.maxAttempts || 3,
+            waitAfterClick: args.waitAfterClick || 3000
+          });
+
+          result = {
+            success: turnstileResult.solved,
+            data: {
+              detected: turnstileResult.detected,
+              clicked: turnstileResult.clicked,
+              solved: turnstileResult.solved,
+              position: turnstileResult.position,
+              attempts: turnstileResult.attempt,
+              note: turnstileResult.solved
+                ? 'Turnstile challenge completed'
+                : 'Turnstile clicked but may require additional verification. Try again or use manual interaction.'
+            },
+            ...(turnstileResult.error && { error: turnstileResult.error })
+          };
+          break;
+        }
+
+        // Session management (State Injection pattern for SeleniumBase)
+        case 'browser_load_session': {
+          const seleniumInstance = this.seleniumBaseInstances.get(args.instanceId);
+          if (!seleniumInstance) {
+            const playwrightInstance = this.browserManager.getInstance(args.instanceId);
+            if (playwrightInstance) {
+              result = {
+                success: false,
+                error: 'load_session is only available for SeleniumBase backend.'
+              };
+            } else {
+              result = { success: false, error: `Instance ${args.instanceId} not found` };
+            }
+            break;
+          }
+
+          if (!args.domain) {
+            result = { success: false, error: 'domain parameter required for load_session' };
+            break;
+          }
+
+          try {
+            const loaded = await seleniumInstance.loadSession(args.domain);
+            result = {
+              success: loaded,
+              data: {
+                loaded,
+                domain: args.domain,
+                note: loaded
+                  ? 'Session loaded. Reload the page to apply cookies.'
+                  : `No saved session found for ${args.domain}`
+              }
+            };
+          } catch (error) {
+            result = {
+              success: false,
+              error: `Load session failed: ${error instanceof Error ? error.message : error}`
+            };
+          }
+          break;
+        }
+
+        case 'browser_list_sessions': {
+          try {
+            const { SeleniumBaseInstance } = await import('./backends/seleniumbase-driver.js');
+            const sessions = SeleniumBaseInstance.listSessions();
+            result = {
+              success: true,
+              data: {
+                sessions,
+                count: sessions.length,
+                note: 'These sessions will be auto-loaded when creating SeleniumBase browsers for these domains.'
+              }
+            };
+          } catch (error) {
+            result = {
+              success: false,
+              error: `List sessions failed: ${error instanceof Error ? error.message : error}`
+            };
+          }
           break;
         }
 
@@ -3044,6 +3450,137 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
     }
   }
 
+  // ============= SeleniumBase Backend Methods =============
+
+  /**
+   * Create a page using SeleniumBase UC backend.
+   * Use this for Cloudflare-protected sites that block Playwright.
+   *
+   * Limitations:
+   * - No network interception (browser_get_network_logs won't work)
+   * - No ARIA tree snapshots (browser_snapshot returns DOM instead)
+   * - Single profile (no multi-pool support)
+   * - Basic humanization (no ghost-cursor)
+   */
+  private async createSeleniumBasePage(url?: string, headless?: boolean): Promise<ToolResult> {
+    try {
+      // Check if SeleniumBase HTTP mode is available (preferred for persistence)
+      const httpAvailable = await isSeleniumBaseHttpAvailable();
+
+      if (!httpAvailable) {
+        // Fall back to stdin/stdout mode
+        if (this.seleniumBaseAvailable === null) {
+          this.seleniumBaseAvailable = await isSeleniumBaseAvailable();
+        }
+
+        if (!this.seleniumBaseAvailable) {
+          return {
+            success: false,
+            error: 'SeleniumBase is not available. Install with: pip install seleniumbase',
+            data: {
+              suggestion: 'Run "pip install seleniumbase" in your terminal, then restart Claude Code.'
+            }
+          };
+        }
+
+        // Use stdin/stdout mode (less reliable, loses connection on MCP restart)
+        const instance = await createSeleniumBaseInstance({
+          url,
+          headless: headless ?? false,
+        });
+
+        this.seleniumBaseInstances.set(instance.id, instance);
+        const pageInfo = await instance.page.getInfo();
+
+        return {
+          success: true,
+          data: {
+            id: instance.id,
+            mode: 'persistent',
+            backend: 'seleniumbase',
+            url: pageInfo.url,
+            title: pageInfo.title,
+            createdAt: instance.createdAt.toISOString(),
+            limitations: [
+              'No network interception (browser_get_network_logs unavailable)',
+              'No ARIA tree (browser_snapshot uses DOM parsing)',
+              'Single profile (no pool-0 to pool-9)',
+              'Basic humanization only',
+              'Connection lost on MCP restart (use save_session to preserve login)'
+            ],
+            note: 'SeleniumBase UC provides Cloudflare bypass but with limited features vs Playwright'
+          },
+        };
+      }
+
+      // Use HTTP mode (persistent across MCP restarts)
+      const instance = await createSeleniumBaseHttpInstance({
+        url,
+        headless: headless ?? false,
+      });
+
+      // Store the instance
+      this.seleniumBaseInstances.set(instance.id, instance);
+
+      // Get page info
+      const pageInfo = await instance.page.getInfo();
+
+      return {
+        success: true,
+        data: {
+          id: instance.id,
+          mode: 'persistent',
+          backend: 'seleniumbase',
+          url: pageInfo.url,
+          title: pageInfo.title,
+          createdAt: instance.createdAt.toISOString(),
+          limitations: [
+            'No network interception (browser_get_network_logs unavailable)',
+            'No ARIA tree (browser_snapshot uses DOM parsing)',
+            'Single profile (no pool-0 to pool-9)',
+            'Basic humanization only'
+          ],
+          note: 'SeleniumBase UC (HTTP mode) - persists across MCP restarts'
+        },
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to create SeleniumBase page: ${error instanceof Error ? error.message : error}`,
+        data: {
+          suggestion: 'Ensure SeleniumBase is installed: pip install seleniumbase'
+        }
+      };
+    }
+  }
+
+  /**
+   * Close a SeleniumBase instance
+   */
+  private async closeSeleniumBaseInstance(id: string): Promise<ToolResult> {
+    const instance = this.seleniumBaseInstances.get(id);
+    if (!instance) {
+      return {
+        success: false,
+        error: `SeleniumBase instance ${id} not found`
+      };
+    }
+
+    try {
+      await instance.close();
+      this.seleniumBaseInstances.delete(id);
+      return {
+        success: true,
+        data: { id, closed: true }
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Failed to close SeleniumBase instance: ${error instanceof Error ? error.message : error}`
+      };
+    }
+  }
+
   /**
    * Get protection level for a domain
    */
@@ -3201,6 +3738,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   /**
    * Get a Page from either instanceId or pageId
    * This enables tools to work with all browser_create modes (persistent, incognito, isolated)
+   * NOTE: This only returns Playwright pages. For SeleniumBase, use getSeleniumBaseInstance directly.
    */
   private getPageFromId(id: string): { page: Page; source: 'instance' | 'global' } | null {
     // First try as instanceId
@@ -3221,12 +3759,37 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   // ============= Implementation of specific tool methods =============
 
   private async navigate(instanceId: string, url: string, options: NavigationOptions): Promise<ToolResult> {
+    // First check if it's a SeleniumBase instance
+    const seleniumInstance = this.seleniumBaseInstances.get(instanceId);
+    if (seleniumInstance) {
+      try {
+        await seleniumInstance.page.goto(url, options);
+        const info = await seleniumInstance.page.getInfo();
+        return {
+          success: true,
+          data: {
+            url: info.url,
+            title: info.title,
+            backend: 'seleniumbase'
+          },
+          instanceId
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `SeleniumBase navigation failed: ${error instanceof Error ? error.message : error}`
+        };
+      }
+    }
+
+    // Try Playwright pages
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
     }
 
     try {
+      // Playwright backend
       const gotoOptions: any = {
         waitUntil: options.waitUntil
       };
@@ -3277,6 +3840,26 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   }
 
   private async goBack(instanceId: string): Promise<ToolResult> {
+    // Check for SeleniumBase instance first
+    const seleniumInstance = this.seleniumBaseInstances.get(instanceId);
+    if (seleniumInstance) {
+      try {
+        await seleniumInstance.page.goBack();
+        const info = await seleniumInstance.page.getInfo();
+        return {
+          success: true,
+          data: { url: info.url, backend: 'seleniumbase' },
+          instanceId
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `Go back failed: ${error instanceof Error ? error.message : error}`,
+          instanceId
+        };
+      }
+    }
+
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
@@ -3299,6 +3882,26 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   }
 
   private async goForward(instanceId: string): Promise<ToolResult> {
+    // Check for SeleniumBase instance first
+    const seleniumInstance = this.seleniumBaseInstances.get(instanceId);
+    if (seleniumInstance) {
+      try {
+        await seleniumInstance.page.goForward();
+        const info = await seleniumInstance.page.getInfo();
+        return {
+          success: true,
+          data: { url: info.url, backend: 'seleniumbase' },
+          instanceId
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `Go forward failed: ${error instanceof Error ? error.message : error}`,
+          instanceId
+        };
+      }
+    }
+
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
@@ -3321,6 +3924,26 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   }
 
   private async refresh(instanceId: string): Promise<ToolResult> {
+    // Check for SeleniumBase instance first
+    const seleniumInstance = this.seleniumBaseInstances.get(instanceId);
+    if (seleniumInstance) {
+      try {
+        await seleniumInstance.page.reload();
+        const info = await seleniumInstance.page.getInfo();
+        return {
+          success: true,
+          data: { url: info.url, backend: 'seleniumbase' },
+          instanceId
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `Refresh failed: ${error instanceof Error ? error.message : error}`,
+          instanceId
+        };
+      }
+    }
+
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
@@ -3343,6 +3966,43 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   }
 
   private async click(instanceId: string, selector: string | undefined, options: ClickOptions): Promise<ToolResult> {
+    // Check for SeleniumBase instance first
+    const seleniumInstance = this.seleniumBaseInstances.get(instanceId);
+    if (seleniumInstance) {
+      if (!selector && !options.position) {
+        return { success: false, error: 'Either selector or position must be provided' };
+      }
+      try {
+        if (options.position) {
+          // SeleniumBase doesn't have direct mouse.click, use JavaScript
+          await seleniumInstance.page.evaluate(`
+            document.elementFromPoint(${options.position.x}, ${options.position.y})?.click()
+          `);
+        } else if (selector) {
+          // Translate Playwright-specific selectors to SeleniumBase-compatible format
+          const translated = translateSelectorForSeleniumBase(selector);
+          console.error(`[SeleniumBase] Click selector: "${selector}" → ${translated.type}: "${translated.selector}"`);
+
+          // Pass locatorType to Python bridge (ClickOptions extended internally)
+          await seleniumInstance.page.click(translated.selector, {
+            timeout: options.timeout,
+            locatorType: translated.type,
+          } as ClickOptions & { locatorType?: string });
+        }
+        return {
+          success: true,
+          data: { selector: selector || `position(${options.position?.x},${options.position?.y})`, clicked: true, backend: 'seleniumbase' },
+          instanceId
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `SeleniumBase click failed: ${error instanceof Error ? error.message : error}`
+        };
+      }
+    }
+
+    // Playwright backend
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
@@ -3577,6 +4237,25 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   }
 
   private async type(instanceId: string, selector: string, text: string, options: TypeOptions): Promise<ToolResult> {
+    // Check for SeleniumBase instance first
+    const seleniumInstance = this.seleniumBaseInstances.get(instanceId);
+    if (seleniumInstance) {
+      try {
+        await seleniumInstance.page.type(selector, text, { delay: options.delay });
+        return {
+          success: true,
+          data: { selector, text, typed: true, backend: 'seleniumbase' },
+          instanceId
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `SeleniumBase type failed: ${error instanceof Error ? error.message : error}`
+        };
+      }
+    }
+
+    // Playwright backend
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
@@ -3620,6 +4299,25 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   }
 
   private async fill(instanceId: string, selector: string, value: string, options: { timeout: number; humanize?: HumanizeMode }): Promise<ToolResult> {
+    // Check for SeleniumBase instance first
+    const seleniumInstance = this.seleniumBaseInstances.get(instanceId);
+    if (seleniumInstance) {
+      try {
+        await seleniumInstance.page.fill(selector, value, { timeout: options.timeout });
+        return {
+          success: true,
+          data: { selector, value, filled: true, backend: 'seleniumbase' },
+          instanceId
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `SeleniumBase fill failed: ${error instanceof Error ? error.message : error}`
+        };
+      }
+    }
+
+    // Playwright backend
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
@@ -3686,6 +4384,32 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   }
 
   private async scroll(instanceId: string, options: ScrollOptions): Promise<ToolResult> {
+    // Check for SeleniumBase instance first
+    const seleniumInstance = this.seleniumBaseInstances.get(instanceId);
+    if (seleniumInstance) {
+      try {
+        // Map 'top'/'bottom' to 'up'/'down' for SeleniumBase adapter
+        const direction = options.direction === 'top' ? 'up'
+          : options.direction === 'bottom' ? 'down'
+          : (options.direction as 'up' | 'down' | undefined);
+        await seleniumInstance.page.scroll({
+          direction,
+          amount: options.amount
+        });
+        return {
+          success: true,
+          data: { direction: options.direction || 'down', amount: options.amount || 300, backend: 'seleniumbase' },
+          instanceId
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `SeleniumBase scroll failed: ${error instanceof Error ? error.message : error}`
+        };
+      }
+    }
+
+    // Playwright backend
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
@@ -3877,6 +4601,32 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   }
 
   private async screenshot(instanceId: string, options: ScreenshotOptions, selector?: string): Promise<ToolResult> {
+    // Check for SeleniumBase instance first
+    const seleniumInstance = this.seleniumBaseInstances.get(instanceId);
+    if (seleniumInstance) {
+      try {
+        const screenshotData = await seleniumInstance.page.screenshot({
+          fullPage: options.fullPage,
+          type: options.type || 'png',
+        });
+        return {
+          success: true,
+          data: {
+            screenshot: screenshotData.toString('base64'),
+            mimeType: options.type === 'jpeg' ? 'image/jpeg' : 'image/png',
+            backend: 'seleniumbase'
+          },
+          instanceId
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `SeleniumBase screenshot failed: ${error instanceof Error ? error.message : error}`
+        };
+      }
+    }
+
+    // Playwright backend
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
@@ -3968,6 +4718,30 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   }
 
   private async evaluate(instanceId: string, script: string): Promise<ToolResult> {
+    // Validate script parameter first
+    if (!script || typeof script !== 'string') {
+      return { success: false, error: 'Evaluate requires a script parameter. Use target, text, or options.expression to provide the JavaScript code.' };
+    }
+
+    // Check for SeleniumBase instance first
+    const seleniumInstance = this.seleniumBaseInstances.get(instanceId);
+    if (seleniumInstance) {
+      try {
+        const result = await seleniumInstance.page.evaluate(script);
+        return {
+          success: true,
+          data: { script, result, backend: 'seleniumbase' },
+          instanceId
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: `Evaluate failed: ${error instanceof Error ? error.message : error}`,
+          instanceId
+        };
+      }
+    }
+
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
@@ -4198,6 +4972,12 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
     instanceId: string,
     options: { selector?: string; expectation?: string; maxElements?: number } = {}
   ): Promise<ToolResult> {
+    // Check for SeleniumBase instance first - use DOM parsing as fallback
+    const seleniumInstance = this.seleniumBaseInstances.get(instanceId);
+    if (seleniumInstance) {
+      return this.getSnapshotSeleniumBase(seleniumInstance, options);
+    }
+
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
@@ -4246,6 +5026,230 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         success: false,
         error: `Snapshot failed: ${error instanceof Error ? error.message : error}`,
         instanceId
+      };
+    }
+  }
+
+  /**
+   * DOM-based snapshot for SeleniumBase (fallback when ARIA tree is not available)
+   * Parses the DOM to extract interactive elements in a structured format
+   */
+  private async getSnapshotSeleniumBase(
+    instance: SeleniumBaseInstance | SeleniumBaseHttpInstance,
+    options: { selector?: string; expectation?: string; maxElements?: number } = {}
+  ): Promise<ToolResult> {
+    try {
+      const info = await instance.page.getInfo();
+      const url = info.url;
+      const title = info.title;
+
+      // DOM parsing script - extracts interactive elements similar to ARIA tree
+      const domParsingScript = `
+        (function() {
+          const selector = ${JSON.stringify(options.selector || 'body')};
+          const root = document.querySelector(selector) || document.body;
+          const elements = [];
+
+          // Interactive element selectors
+          const interactiveSelectors = [
+            'a[href]', 'button', 'input', 'select', 'textarea',
+            '[role="button"]', '[role="link"]', '[role="textbox"]',
+            '[role="checkbox"]', '[role="radio"]', '[role="tab"]',
+            '[role="menuitem"]', '[role="option"]', '[role="switch"]',
+            '[onclick]', '[tabindex]:not([tabindex="-1"])',
+            'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+            'img[alt]', 'label', 'nav', 'main', 'aside', 'article'
+          ];
+
+          // Find all interactive elements
+          const found = root.querySelectorAll(interactiveSelectors.join(', '));
+          let index = 0;
+
+          found.forEach(el => {
+            const tag = el.tagName.toLowerCase();
+            const role = el.getAttribute('role') || getImplicitRole(tag, el);
+            const text = getAccessibleName(el);
+            const type = el.getAttribute('type');
+            const href = el.getAttribute('href');
+            const checked = el.checked;
+            const disabled = el.disabled || el.getAttribute('aria-disabled') === 'true';
+            const expanded = el.getAttribute('aria-expanded');
+            const selected = el.getAttribute('aria-selected');
+
+            // Build element representation
+            let repr = '';
+
+            // Add role/type
+            if (role) {
+              repr += '- ' + role;
+            } else {
+              repr += '- ' + tag;
+            }
+
+            // Add text content
+            if (text) {
+              repr += ' "' + text.substring(0, 100) + '"';
+            }
+
+            // Add states
+            const states = [];
+            if (disabled) states.push('disabled');
+            if (checked) states.push('checked');
+            if (expanded === 'true') states.push('expanded');
+            if (expanded === 'false') states.push('collapsed');
+            if (selected === 'true') states.push('selected');
+            if (type) states.push('type=' + type);
+            if (href) states.push('href=' + href.substring(0, 50));
+
+            if (states.length > 0) {
+              repr += ' [' + states.join(', ') + ']';
+            }
+
+            // Add ref for targeting
+            repr += ' [ref=e' + index + ']';
+
+            elements.push(repr);
+
+            // Store ref on element for click targeting
+            el.setAttribute('data-hydra-ref', 'e' + index);
+            index++;
+          });
+
+          function getImplicitRole(tag, el) {
+            const roles = {
+              'a': el.hasAttribute('href') ? 'link' : null,
+              'button': 'button',
+              'input': getInputRole(el),
+              'select': 'combobox',
+              'textarea': 'textbox',
+              'nav': 'navigation',
+              'main': 'main',
+              'aside': 'complementary',
+              'article': 'article',
+              'h1': 'heading',
+              'h2': 'heading',
+              'h3': 'heading',
+              'h4': 'heading',
+              'h5': 'heading',
+              'h6': 'heading',
+              'img': 'img',
+              'label': 'label'
+            };
+            return roles[tag] || null;
+          }
+
+          function getInputRole(el) {
+            const type = el.getAttribute('type') || 'text';
+            const roles = {
+              'checkbox': 'checkbox',
+              'radio': 'radio',
+              'button': 'button',
+              'submit': 'button',
+              'reset': 'button',
+              'range': 'slider',
+              'number': 'spinbutton',
+              'search': 'searchbox'
+            };
+            return roles[type] || 'textbox';
+          }
+
+          function getAccessibleName(el) {
+            // Try aria-label first
+            let name = el.getAttribute('aria-label');
+            if (name) return name.trim();
+
+            // Try aria-labelledby
+            const labelledBy = el.getAttribute('aria-labelledby');
+            if (labelledBy) {
+              const labelEl = document.getElementById(labelledBy);
+              if (labelEl) return labelEl.textContent.trim();
+            }
+
+            // Try associated label
+            if (el.id) {
+              const label = document.querySelector('label[for="' + el.id + '"]');
+              if (label) return label.textContent.trim();
+            }
+
+            // Try title or alt
+            name = el.getAttribute('title') || el.getAttribute('alt');
+            if (name) return name.trim();
+
+            // Try text content (for buttons, links, headings)
+            const tag = el.tagName.toLowerCase();
+            if (['button', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'label'].includes(tag)) {
+              return el.textContent.trim().replace(/\\s+/g, ' ');
+            }
+
+            // Try placeholder for inputs
+            if (tag === 'input' || tag === 'textarea') {
+              return el.getAttribute('placeholder') || '';
+            }
+
+            return '';
+          }
+
+          return {
+            elements: elements,
+            totalCount: elements.length
+          };
+        })();
+      `;
+
+      const result = await instance.page.evaluate(domParsingScript) as { elements: string[]; totalCount: number } | null;
+
+      // Handle null result (can happen if page is not fully loaded or script fails)
+      if (!result || !result.elements) {
+        return {
+          success: false,
+          error: 'Snapshot failed: DOM parsing returned null. The page may not be fully loaded.',
+          data: { url, title, backend: 'seleniumbase' }
+        };
+      }
+
+      let snapshot = result.elements.join('\\n');
+      const originalLength = snapshot.length;
+      let filtered = false;
+
+      // Apply expectation-based filtering
+      if (options.expectation) {
+        snapshot = this.filterSnapshotByExpectation(snapshot, options.expectation);
+        filtered = true;
+      }
+
+      // Apply maxElements limit
+      if (options.maxElements && options.maxElements > 0) {
+        const lines = snapshot.split('\\n').slice(0, options.maxElements);
+        snapshot = lines.join('\\n');
+        filtered = true;
+      }
+
+      return {
+        success: true,
+        data: {
+          snapshot,
+          url,
+          title,
+          selector: options.selector || 'body',
+          snapshotLength: snapshot.length,
+          originalLength: filtered ? originalLength : undefined,
+          tokensSaved: filtered ? `${Math.round((1 - snapshot.length / originalLength) * 100)}%` : undefined,
+          expectation: options.expectation,
+          maxElements: options.maxElements,
+          backend: 'seleniumbase',
+          note: 'DOM-based snapshot (ARIA tree not available with SeleniumBase)'
+        },
+        instanceId: instance.id
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: `Snapshot failed (SeleniumBase): ${error instanceof Error ? error.message : error}`,
+        instanceId: instance.id,
+        data: {
+          backend: 'seleniumbase',
+          suggestion: 'DOM parsing failed. Try browser_screenshot instead.'
+        }
       };
     }
   }
