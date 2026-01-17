@@ -188,61 +188,61 @@ program
   .command('example')
   .description('Show usage examples')
   .action(() => {
-    console.log(chalk.bold('\n📚 Usage Examples:\n'));
+    console.error(chalk.bold('\n📚 Usage Examples:\n'));
     
-    console.log(chalk.yellow('1. Start server (default configuration):'));
-    console.log(chalk.gray('  npx hydraspecter\n'));
+    console.error(chalk.yellow('1. Start server (default configuration):'));
+    console.error(chalk.gray('  npx hydraspecter\n'));
 
-    console.log(chalk.yellow('2. Start server (custom configuration):'));
-    console.log(chalk.gray('  npx hydraspecter --max-instances 25 --browser firefox --headless false\n'));
+    console.error(chalk.yellow('2. Start server (custom configuration):'));
+    console.error(chalk.gray('  npx hydraspecter --max-instances 25 --browser firefox --headless false\n'));
 
-    console.log(chalk.yellow('3. Start server with proxy:'));
-    console.log(chalk.gray('  npx hydraspecter --proxy http://127.0.0.1:7890\n'));
+    console.error(chalk.yellow('3. Start server with proxy:'));
+    console.error(chalk.gray('  npx hydraspecter --proxy http://127.0.0.1:7890\n'));
 
-    console.log(chalk.yellow('4. Start server without proxy auto-detection:'));
-    console.log(chalk.gray('  npx hydraspecter --no-proxy-auto-detect\n'));
+    console.error(chalk.yellow('4. Start server without proxy auto-detection:'));
+    console.error(chalk.gray('  npx hydraspecter --no-proxy-auto-detect\n'));
 
-    console.log(chalk.yellow('5. Start server with human-like behaviors (anti-detection):'));
-    console.log(chalk.gray('  npx hydraspecter --humanize\n'));
+    console.error(chalk.yellow('5. Start server with human-like behaviors (anti-detection):'));
+    console.error(chalk.gray('  npx hydraspecter --humanize\n'));
 
-    console.log(chalk.yellow('6. Start server with ADAPTIVE humanize (recommended):'));
-    console.log(chalk.gray('  npx hydraspecter --humanize-auto'));
-    console.log(chalk.gray('  # Only activates humanize when Cloudflare, CAPTCHAs, or rate limits detected\n'));
+    console.error(chalk.yellow('6. Start server with ADAPTIVE humanize (recommended):'));
+    console.error(chalk.gray('  npx hydraspecter --humanize-auto'));
+    console.error(chalk.gray('  # Only activates humanize when Cloudflare, CAPTCHAs, or rate limits detected\n'));
 
-    console.log(chalk.yellow('7. Start server with specific human behaviors:'));
-    console.log(chalk.gray('  npx hydraspecter --humanize-mouse --humanize-typing\n'));
+    console.error(chalk.yellow('7. Start server with specific human behaviors:'));
+    console.error(chalk.gray('  npx hydraspecter --humanize-mouse --humanize-typing\n'));
 
-    console.log(chalk.yellow('8. Use in MCP client:'));
-    console.log(chalk.gray('  {'));
-    console.log(chalk.gray('    "mcpServers": {'));
-    console.log(chalk.gray('      "hydraspecter": {'));
-    console.log(chalk.gray('        "command": "npx",'));
-    console.log(chalk.gray('        "args": ["hydraspecter", "--max-instances", "20", "--proxy", "http://127.0.0.1:7890"]'));
-    console.log(chalk.gray('      }'));
-    console.log(chalk.gray('    }'));
-    console.log(chalk.gray('  }\n'));
+    console.error(chalk.yellow('8. Use in MCP client:'));
+    console.error(chalk.gray('  {'));
+    console.error(chalk.gray('    "mcpServers": {'));
+    console.error(chalk.gray('      "hydraspecter": {'));
+    console.error(chalk.gray('        "command": "npx",'));
+    console.error(chalk.gray('        "args": ["hydraspecter", "--max-instances", "20", "--proxy", "http://127.0.0.1:7890"]'));
+    console.error(chalk.gray('      }'));
+    console.error(chalk.gray('    }'));
+    console.error(chalk.gray('  }\n'));
     
-    console.log(chalk.yellow('9. Browser creation (unified tool):'));
-    console.log(chalk.gray('  - browser_create: Create browser (modes: persistent/incognito/isolated)'));
-    console.log(chalk.gray('  - browser_get_protection_level: Check domain protection level'));
-    console.log(chalk.gray('  - browser_reset_protection: Reset domain protection to level 0\n'));
+    console.error(chalk.yellow('9. Browser creation (unified tool):'));
+    console.error(chalk.gray('  - browser_create: Create browser (modes: persistent/incognito/isolated)'));
+    console.error(chalk.gray('  - browser_get_protection_level: Check domain protection level'));
+    console.error(chalk.gray('  - browser_reset_protection: Reset domain protection to level 0\n'));
 
-    console.log(chalk.yellow('10. Standard tools:'));
-    console.log(chalk.gray('  - browser_list_instances: List all instances'));
-    console.log(chalk.gray('  - browser_navigate: Navigate to URL (with detection feedback)'));
-    console.log(chalk.gray('  - browser_click: Click element (humanize: true/false/auto)'));
-    console.log(chalk.gray('  - browser_type: Type text (humanize: true/false/auto)'));
-    console.log(chalk.gray('  - browser_fill: Fill form field (humanize: true/false/auto)'));
-    console.log(chalk.gray('  - browser_scroll: Scroll page (humanize: true/false/auto)'));
-    console.log(chalk.gray('  - browser_screenshot: Take screenshot'));
-    console.log(chalk.gray('  - browser_snapshot: Get ARIA tree (token-efficient)'));
-    console.log(chalk.gray('  - browser_batch_execute: Execute multiple operations'));
-    console.log(chalk.gray('  - and more...\n'));
+    console.error(chalk.yellow('10. Standard tools:'));
+    console.error(chalk.gray('  - browser_list_instances: List all instances'));
+    console.error(chalk.gray('  - browser_navigate: Navigate to URL (with detection feedback)'));
+    console.error(chalk.gray('  - browser_click: Click element (humanize: true/false/auto)'));
+    console.error(chalk.gray('  - browser_type: Type text (humanize: true/false/auto)'));
+    console.error(chalk.gray('  - browser_fill: Fill form field (humanize: true/false/auto)'));
+    console.error(chalk.gray('  - browser_scroll: Scroll page (humanize: true/false/auto)'));
+    console.error(chalk.gray('  - browser_screenshot: Take screenshot'));
+    console.error(chalk.gray('  - browser_snapshot: Get ARIA tree (token-efficient)'));
+    console.error(chalk.gray('  - browser_batch_execute: Execute multiple operations'));
+    console.error(chalk.gray('  - and more...\n'));
 
-    console.log(chalk.yellow('11. Test real functionality:'));
-    console.log(chalk.gray('  - Simulation demo: node examples/demo.js'));
-    console.log(chalk.gray('  - Real test: node test-real-screenshot.js (generates actual screenshot files)'));
-    console.log(chalk.gray('  - View screenshots: open screenshot-*.png\n'));
+    console.error(chalk.yellow('11. Test real functionality:'));
+    console.error(chalk.gray('  - Simulation demo: node examples/demo.js'));
+    console.error(chalk.gray('  - Real test: node test-real-screenshot.js (generates actual screenshot files)'));
+    console.error(chalk.gray('  - View screenshots: open screenshot-*.png\n'));
   });
 
 // Error handling

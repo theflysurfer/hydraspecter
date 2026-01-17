@@ -35,12 +35,12 @@ export class BrowserManager {
     const globalProxy = this.config.proxy;
     if (globalProxy?.server) {
       this.detectedProxy = globalProxy.server;
-      console.log(`Using configured proxy: ${this.detectedProxy}`);
+      console.error(`Using configured proxy: ${this.detectedProxy}`);
     } else if (globalProxy?.autoDetect !== false) {
       // Enable auto-detection by default
       this.detectedProxy = await this.detectLocalProxy();
       if (this.detectedProxy) {
-        console.log(`Auto-detected proxy: ${this.detectedProxy}`);
+        console.error(`Auto-detected proxy: ${this.detectedProxy}`);
       }
     }
   }
@@ -52,7 +52,7 @@ export class BrowserManager {
     // 1. Check environment variables
     const envProxy = this.getProxyFromEnv();
     if (envProxy) {
-      console.log(`Proxy detected from environment variables: ${envProxy}`);
+      console.error(`Proxy detected from environment variables: ${envProxy}`);
       return envProxy;
     }
 
@@ -61,7 +61,7 @@ export class BrowserManager {
     for (const port of commonPorts) {
       const proxyUrl = `http://127.0.0.1:${port}`;
       if (await this.testProxyConnection(proxyUrl)) {
-        console.log(`Local proxy port detected: ${port}`);
+        console.error(`Local proxy port detected: ${port}`);
         return proxyUrl;
       }
     }
@@ -70,7 +70,7 @@ export class BrowserManager {
     if (process.platform === 'darwin') {
       const systemProxy = this.getMacOSSystemProxy();
       if (systemProxy) {
-        console.log(`System proxy detected: ${systemProxy}`);
+        console.error(`System proxy detected: ${systemProxy}`);
         return systemProxy;
       }
     }
@@ -193,7 +193,7 @@ export class BrowserManager {
 
       // Use persistent context if userDataDir is specified
       if (config.userDataDir) {
-        console.log('Using persistent browser context mode');
+        console.error('Using persistent browser context mode');
         const result = await this.launchPersistentBrowser(config);
         browser = result.browser;
         context = result.context;
@@ -209,7 +209,7 @@ export class BrowserManager {
         // Handle viewport: null means natural viewport (anti-detection)
         if (config.viewport === null) {
           contextOptions.viewport = null;  // Use natural viewport
-          console.log('Using natural viewport (anti-detection mode)');
+          console.error('Using natural viewport (anti-detection mode)');
         } else if (config.viewport) {
           contextOptions.viewport = config.viewport;
         }
@@ -229,7 +229,7 @@ export class BrowserManager {
         if (config.storageStatePath && fs.existsSync(config.storageStatePath)) {
           try {
             contextOptions.storageState = config.storageStatePath;
-            console.log(`Loading session state from: ${config.storageStatePath}`);
+            console.error(`Loading session state from: ${config.storageStatePath}`);
           } catch (error) {
             console.warn(`Failed to load storage state: ${error}`);
           }
@@ -436,7 +436,7 @@ export class BrowserManager {
     // Use real Chrome/Edge channel if specified (recommended for anti-detection)
     if (config.channel && config.browserType === 'chromium') {
       launchOptions.channel = config.channel;
-      console.log(`Using real browser channel: ${config.channel}`);
+      console.error(`Using real browser channel: ${config.channel}`);
     }
 
     // Add window size only if not using natural viewport
@@ -469,10 +469,10 @@ export class BrowserManager {
     // Ensure userDataDir exists
     if (!fs.existsSync(config.userDataDir)) {
       fs.mkdirSync(config.userDataDir, { recursive: true });
-      console.log(`Created user data directory: ${config.userDataDir}`);
+      console.error(`Created user data directory: ${config.userDataDir}`);
     }
 
-    console.log(`Launching persistent context with userDataDir: ${config.userDataDir}`);
+    console.error(`Launching persistent context with userDataDir: ${config.userDataDir}`);
 
     // launchPersistentContext returns a BrowserContext directly (not a Browser)
     const context = await chromiumExtra.launchPersistentContext(config.userDataDir, {
@@ -512,7 +512,7 @@ export class BrowserManager {
       case 'chromium':
         // Use playwright-extra with stealth plugin to avoid bot detection
         const channelInfo = config.channel ? ` (channel: ${config.channel})` : '';
-        console.log(`Launching Chromium with enhanced stealth mode${channelInfo}`);
+        console.error(`Launching Chromium with enhanced stealth mode${channelInfo}`);
         return await chromiumExtra.launch(launchOptions);
       case 'firefox':
         return await firefox.launch(launchOptions);
@@ -548,7 +548,7 @@ export class BrowserManager {
 
     for (const instanceId of instancesToClose) {
       await this.closeInstance(instanceId);
-      console.log(`Cleaned up inactive instance: ${instanceId}`);
+      console.error(`Cleaned up inactive instance: ${instanceId}`);
     }
   }
 

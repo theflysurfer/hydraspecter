@@ -112,13 +112,13 @@ export class ConcurrentBrowserServer {
 
     // Handle server shutdown
     process.on('SIGINT', async () => {
-      console.log('\nShutting down server...');
+      console.error('\nShutting down server...');
       await this.shutdown();
       process.exit(0);
     });
 
     process.on('SIGTERM', async () => {
-      console.log('\nShutting down server...');
+      console.error('\nShutting down server...');
       await this.shutdown();
       process.exit(0);
     });
@@ -131,9 +131,12 @@ export class ConcurrentBrowserServer {
     console.error('HydraSpecter MCP Server started');
 
     // Sync Chrome sessions in background (don't block MCP handshake)
-    syncAllProfilesFromChrome().catch(err => {
-      console.error('[SyncAll] Background sync failed:', err.message);
-    });
+    // Wrapped in setTimeout to ensure MCP transport is fully ready
+    setTimeout(() => {
+      syncAllProfilesFromChrome().catch(err => {
+        console.error('[SyncAll] Background sync failed:', err.message);
+      });
+    }, 100);
   }
 
   async shutdown() {

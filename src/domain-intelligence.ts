@@ -192,7 +192,7 @@ export class DomainIntelligence {
 
     // If no profile exists and it's a known difficult domain, start with level 2
     if (!profile && HIGH_PROTECTION_DOMAINS.has(domain)) {
-      console.log(`[DomainIntelligence] ${domain} is a known difficult domain, using protection level 2`);
+      console.error(`[DomainIntelligence] ${domain} is a known difficult domain, using protection level 2`);
       return 2;
     }
 
@@ -246,7 +246,7 @@ export class DomainIntelligence {
       detectionCount: (profile.detectionCount || 0) + 1,
     });
 
-    console.log(`[DomainIntelligence] ${domain}: Detection reported, level ${profile.level} -> ${newLevel}`);
+    console.error(`[DomainIntelligence] ${domain}: Detection reported, level ${profile.level} -> ${newLevel}`);
     this.scheduleSave();
 
     return newLevel;
@@ -278,7 +278,7 @@ export class DomainIntelligence {
       level,
     });
 
-    console.log(`[DomainIntelligence] ${domain}: Level set to ${level}`);
+    console.error(`[DomainIntelligence] ${domain}: Level set to ${level}`);
     this.scheduleSave();
   }
 
@@ -288,7 +288,7 @@ export class DomainIntelligence {
   resetLevel(url: string): void {
     const domain = this.getRootDomain(url);
     this.profiles.delete(domain);
-    console.log(`[DomainIntelligence] ${domain}: Level reset`);
+    console.error(`[DomainIntelligence] ${domain}: Level reset`);
     this.scheduleSave();
   }
 
@@ -324,7 +324,7 @@ export class DomainIntelligence {
           this.profiles.set(domain, profile);
         }
 
-        console.log(`[DomainIntelligence] Loaded ${this.profiles.size} domain profiles`);
+        console.error(`[DomainIntelligence] Loaded ${this.profiles.size} domain profiles`);
       }
     } catch (error) {
       console.warn(`[DomainIntelligence] Failed to load: ${error}`);
@@ -349,7 +349,7 @@ export class DomainIntelligence {
 
       fs.writeFileSync(this.storagePath, JSON.stringify(data, null, 2));
       this.dirty = false;
-      console.log(`[DomainIntelligence] Saved ${this.profiles.size} domain profiles`);
+      console.error(`[DomainIntelligence] Saved ${this.profiles.size} domain profiles`);
     } catch (error) {
       console.error(`[DomainIntelligence] Failed to save: ${error}`);
     }

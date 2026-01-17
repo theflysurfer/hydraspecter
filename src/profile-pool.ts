@@ -148,7 +148,7 @@ export class ProfilePool {
       const lockPath = this.getLockPath(profileId);
 
       if (fs.existsSync(lockPath) && this.isLockStale(lockPath)) {
-        console.log(`[ProfilePool] Cleaning stale lock for ${profileId}`);
+        console.error(`[ProfilePool] Cleaning stale lock for ${profileId}`);
         fs.unlinkSync(lockPath);
       }
     }
@@ -188,7 +188,7 @@ export class ProfilePool {
 
       // Check Chrome's native lock first (another Chrome may have the profile open)
       if (this.isChromeLockActive(profilePath)) {
-        console.log(`[ProfilePool] Profile ${profileId} locked by Chrome, trying next`);
+        console.error(`[ProfilePool] Profile ${profileId} locked by Chrome, trying next`);
         continue;
       }
 
@@ -205,7 +205,7 @@ export class ProfilePool {
           // Use exclusive flag to prevent race conditions
           fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2), { flag: 'wx' });
           this.acquiredProfile = profileId;
-          console.log(`[ProfilePool] Acquired profile: ${profileId}`);
+          console.error(`[ProfilePool] Acquired profile: ${profileId}`);
           return { profileId, profilePath };
         } catch (err: any) {
           // Another process grabbed it first, try next
@@ -233,7 +233,7 @@ export class ProfilePool {
         // Only release if we own this lock
         if (lock.mcpId === this.mcpId) {
           fs.unlinkSync(lockPath);
-          console.log(`[ProfilePool] Released profile: ${profileId}`);
+          console.error(`[ProfilePool] Released profile: ${profileId}`);
 
           if (this.acquiredProfile === profileId) {
             this.acquiredProfile = null;
@@ -254,7 +254,7 @@ export class ProfilePool {
     if (fs.existsSync(lockPath)) {
       try {
         fs.unlinkSync(lockPath);
-        console.log(`[ProfilePool] Force released profile: ${profileId}`);
+        console.error(`[ProfilePool] Force released profile: ${profileId}`);
         return true;
       } catch (err) {
         console.error(`[ProfilePool] Error force releasing profile ${profileId}:`, err);

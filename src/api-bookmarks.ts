@@ -185,7 +185,7 @@ export class ApiBookmarks {
     };
 
     domainEndpoints.set(slug, savedEndpoint);
-    console.log(`[ApiBookmarks] ${existing ? 'Updated' : 'Added'} endpoint: ${id}`);
+    console.error(`[ApiBookmarks] ${existing ? 'Updated' : 'Added'} endpoint: ${id}`);
     this.scheduleSave();
 
     return { id, created: !existing };
@@ -282,7 +282,7 @@ export class ApiBookmarks {
       if (domainEndpoints.size === 0) {
         this.endpoints.delete(domain);
       }
-      console.log(`[ApiBookmarks] Deleted endpoint: ${id}`);
+      console.error(`[ApiBookmarks] Deleted endpoint: ${id}`);
       this.scheduleSave();
     }
 
@@ -332,7 +332,7 @@ export class ApiBookmarks {
           }
         }
 
-        console.log(`[ApiBookmarks] Loaded ${this.getTotalCount()} endpoints across ${this.endpoints.size} domains`);
+        console.error(`[ApiBookmarks] Loaded ${this.getTotalCount()} endpoints across ${this.endpoints.size} domains`);
       }
     } catch (error) {
       console.warn(`[ApiBookmarks] Failed to load: ${error}`);
@@ -364,7 +364,7 @@ export class ApiBookmarks {
 
       fs.writeFileSync(this.storagePath, JSON.stringify(data, null, 2));
       this.dirty = false;
-      console.log(`[ApiBookmarks] Saved ${this.getTotalCount()} endpoints`);
+      console.error(`[ApiBookmarks] Saved ${this.getTotalCount()} endpoints`);
     } catch (error) {
       console.error(`[ApiBookmarks] Failed to save: ${error}`);
     }

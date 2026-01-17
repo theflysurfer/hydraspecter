@@ -64,7 +64,7 @@ function trySyncViaVSS(targetProfileDir: string): boolean {
 
     // Check if script exists
     if (!fs.existsSync(scriptPath)) {
-      console.log('[SessionSync] VSS script not found, skipping');
+      console.error('[SessionSync] VSS script not found, skipping');
       return false;
     }
 
@@ -74,14 +74,14 @@ function trySyncViaVSS(targetProfileDir: string): boolean {
       { stdio: 'pipe', timeout: 30000 }
     );
 
-    console.log('[SessionSync] ✓ VSS sync succeeded');
+    console.error('[SessionSync] ✓ VSS sync succeeded');
     return true;
   } catch (error: any) {
     // VSS requires admin privileges - this is expected to fail in normal mode
     if (error.status === 1 || error.message?.includes('Administrator')) {
-      console.log('[SessionSync] VSS requires admin privileges - run sync-cookies-vss.ps1 as admin once');
+      console.error('[SessionSync] VSS requires admin privileges - run sync-cookies-vss.ps1 as admin once');
     } else {
-      console.log(`[SessionSync] VSS sync failed: ${error.message}`);
+      console.error(`[SessionSync] VSS sync failed: ${error.message}`);
     }
     return false;
   }
@@ -106,7 +106,7 @@ function syncCookiesViaSqlite(chromeCookiesPath: string, targetCookiesPath: stri
     sourceDb.close();
 
     if (cookies.length === 0) {
-      console.log('[SessionSync] No cookies found in Chrome');
+      console.error('[SessionSync] No cookies found in Chrome');
       return false;
     }
 
@@ -132,7 +132,7 @@ function syncCookiesViaSqlite(chromeCookiesPath: string, targetCookiesPath: stri
     sourceDbForSchema.close();
 
     if (!tableInfo?.sql) {
-      console.log('[SessionSync] Could not read cookies table schema');
+      console.error('[SessionSync] Could not read cookies table schema');
       targetDb.close();
       return false;
     }
@@ -157,14 +157,14 @@ function syncCookiesViaSqlite(chromeCookiesPath: string, targetCookiesPath: stri
     insertMany(cookies);
     targetDb.close();
 
-    console.log(`[SessionSync] ✓ Cookies synced via SQLite (${cookies.length} cookies)`);
+    console.error(`[SessionSync] ✓ Cookies synced via SQLite (${cookies.length} cookies)`);
     return true;
   } catch (error: any) {
     // If even SQLite read-only fails, Chrome might have an exclusive lock
     if (error.code === 'SQLITE_BUSY' || error.code === 'SQLITE_LOCKED') {
-      console.log('[SessionSync] ⊘ SQLite database is busy/locked');
+      console.error('[SessionSync] ⊘ SQLite database is busy/locked');
     } else {
-      console.log(`[SessionSync] ⊘ SQLite sync failed: ${error.message}`);
+      console.error(`[SessionSync] ⊘ SQLite sync failed: ${error.message}`);
     }
     return false;
   }
@@ -188,7 +188,7 @@ async function syncSessionDataFromChrome(targetProfileDir: string): Promise<bool
 
     // Check if Chrome cookies exist
     if (!fs.existsSync(chromeCookies)) {
-      console.log('[SessionSync] Chrome profile not found, skipping sync');
+      console.error('[SessionSync] Chrome profile not found, skipping sync');
       return false;
     }
 
@@ -199,11 +199,11 @@ async function syncSessionDataFromChrome(targetProfileDir: string): Promise<bool
     // Only sync if Chrome cookies are newer (at least 1 hour difference)
     const hourInMs = 60 * 60 * 1000;
     if (targetStats && (chromeStats.mtime.getTime() - targetStats.mtime.getTime()) < hourInMs) {
-      console.log('[SessionSync] Target session data is recent, skipping sync');
+      console.error('[SessionSync] Target session data is recent, skipping sync');
       return false;
     }
 
-    console.log('[SessionSync] Chrome data is newer, syncing sessions...');
+    console.error('[SessionSync] Chrome data is newer, syncing sessions...');
 
     // 1. Sync Cookies (all sites)
     const targetNetworkDir = path.join(targetProfileDir, 'Network');
@@ -217,17 +217,17 @@ async function syncSessionDataFromChrome(targetProfileDir: string): Promise<bool
       if (fs.existsSync(chromeJournal)) {
         fs.copyFileSync(chromeJournal, targetCookies + '-journal');
       }
-      console.log('[SessionSync] ✓ Cookies synced (direct copy)');
+      console.error('[SessionSync] ✓ Cookies synced (direct copy)');
       cookiesSynced = true;
     } catch (e: any) {
       if (e.code === 'EBUSY' || e.code === 'EACCES') {
         // Chrome is running, try SQLite read-only mode
-        console.log('[SessionSync] Chrome running, trying SQLite read-only mode...');
+        console.error('[SessionSync] Chrome running, trying SQLite read-only mode...');
         cookiesSynced = syncCookiesViaSqlite(chromeCookies, targetCookies);
 
         // If SQLite also fails, try VSS as last resort (requires admin)
         if (!cookiesSynced && process.platform === 'win32') {
-          console.log('[SessionSync] SQLite failed, trying VSS...');
+          console.error('[SessionSync] SQLite failed, trying VSS...');
           cookiesSynced = trySyncViaVSS(targetProfileDir);
         }
       } else {
@@ -242,9 +242,9 @@ async function syncSessionDataFromChrome(targetProfileDir: string): Promise<bool
     if (fs.existsSync(chromeLS)) {
       try {
         copyDirSync(chromeLS, targetLS);
-        console.log('[SessionSync] ✓ Local Storage synced');
+        console.error('[SessionSync] ✓ Local Storage synced');
       } catch (e: any) {
-        console.log('[SessionSync] ⊘ Local Storage locked');
+        console.error('[SessionSync] ⊘ Local Storage locked');
       }
     }
 
@@ -277,17 +277,17 @@ async function syncSessionDataFromChrome(targetProfileDir: string): Promise<bool
       }
 
       if (syncedCount > 0) {
-        console.log(`[SessionSync] ✓ IndexedDB synced (${syncedCount} critical domains)`);
+        console.error(`[SessionSync] ✓ IndexedDB synced (${syncedCount} critical domains)`);
       }
     }
 
-    console.log('[SessionSync] Session sync complete');
+    console.error('[SessionSync] Session sync complete');
     return cookiesSynced; // Return true only if cookies were synced
   } catch (error: any) {
     if (error.code === 'EBUSY' || error.code === 'EACCES') {
-      console.log('[SessionSync] Chrome is running, partial sync only');
+      console.error('[SessionSync] Chrome is running, partial sync only');
     } else {
-      console.log(`[SessionSync] Error: ${error.message}`);
+      console.error(`[SessionSync] Error: ${error.message}`);
     }
     return false;
   }
@@ -304,12 +304,12 @@ export async function syncAllProfilesFromChrome(): Promise<{ synced: number; fai
 
   // Get all pool directories
   if (!fs.existsSync(baseDir)) {
-    console.log('[SyncAll] No profiles directory found');
+    console.error('[SyncAll] No profiles directory found');
     return { synced: 0, failed: 0 };
   }
 
   const pools = fs.readdirSync(baseDir).filter(d => d.startsWith('pool-'));
-  console.log(`[SyncAll] Syncing Chrome sessions to ${pools.length} pools...`);
+  console.error(`[SyncAll] Syncing Chrome sessions to ${pools.length} pools...`);
 
   for (const pool of pools) {
     const poolPath = path.join(baseDir, pool);
@@ -321,7 +321,7 @@ export async function syncAllProfilesFromChrome(): Promise<{ synced: number; fai
     }
   }
 
-  console.log(`[SyncAll] Done: ${synced} synced, ${failed} skipped/failed`);
+  console.error(`[SyncAll] Done: ${synced} synced, ${failed} skipped/failed`);
   return { synced, failed };
 }
 
@@ -359,7 +359,7 @@ export async function syncPoolToOthers(sourcePoolId: string): Promise<{ synced: 
   // Check if source has required files
   const sourceCookies = path.join(sourceDir, 'Default', 'Network', 'Cookies');
   if (!fs.existsSync(sourceCookies)) {
-    console.log(`[PoolSync] No cookies in ${sourcePoolId}, skipping sync`);
+    console.error(`[PoolSync] No cookies in ${sourcePoolId}, skipping sync`);
     return { synced: 0, skipped: 0 };
   }
 
@@ -408,13 +408,13 @@ export async function syncPoolToOthers(sourcePoolId: string): Promise<{ synced: 
         synced++;
       }
     } catch (error) {
-      console.log(`[PoolSync] Failed to sync to ${pool}: ${error}`);
+      console.error(`[PoolSync] Failed to sync to ${pool}: ${error}`);
       skipped++;
     }
   }
 
   if (synced > 0) {
-    console.log(`[PoolSync] Synced ${sourcePoolId} → ${synced} pools (${skipped} skipped/locked)`);
+    console.error(`[PoolSync] Synced ${sourcePoolId} → ${synced} pools (${skipped} skipped/locked)`);
   }
 
   return { synced, skipped };
@@ -489,13 +489,13 @@ export class GlobalProfile {
     this.profileId = acquired.profileId;
     this.profileDir = acquired.profilePath;
 
-    console.log(`[GlobalProfile] Acquired profile: ${this.profileId}`);
+    console.error(`[GlobalProfile] Acquired profile: ${this.profileId}`);
 
     // Auto-sync session data from Chrome if available and newer
     // Syncs: Cookies (all) + Local Storage (all) + IndexedDB (critical domains)
     await syncSessionDataFromChrome(this.profileDir);
 
-    console.log(`[GlobalProfile] Launching persistent context from: ${this.profileDir}`);
+    console.error(`[GlobalProfile] Launching persistent context from: ${this.profileDir}`);
 
     const launchOptions: any = {
       headless: this.headless,
@@ -524,7 +524,7 @@ export class GlobalProfile {
     // Use real Chrome if specified
     if (this.channel) {
       launchOptions.channel = this.channel;
-      console.log(`[GlobalProfile] Using browser channel: ${this.channel}`);
+      console.error(`[GlobalProfile] Using browser channel: ${this.channel}`);
     }
 
     this.context = await chromiumExtra.launchPersistentContext(this.profileDir, launchOptions);
@@ -539,7 +539,7 @@ export class GlobalProfile {
 
     // Handle context close
     this.context.on('close', () => {
-      console.log('[GlobalProfile] Context closed');
+      console.error('[GlobalProfile] Context closed');
       this.context = null;
       this.pages.clear();
       // Release profile back to pool
@@ -550,7 +550,7 @@ export class GlobalProfile {
       }
     });
 
-    console.log(`[GlobalProfile] Context ready (headless: ${this.headless}, profile: ${this.profileId})`);
+    console.error(`[GlobalProfile] Context ready (headless: ${this.headless}, profile: ${this.profileId})`);
     return this.context;
   }
 
@@ -574,7 +574,7 @@ export class GlobalProfile {
     if (blankPage) {
       page = blankPage;
       reused = true;
-      console.log('[GlobalProfile] Reusing existing about:blank page');
+      console.error('[GlobalProfile] Reusing existing about:blank page');
     } else {
       page = await context.newPage();
     }
@@ -592,7 +592,7 @@ export class GlobalProfile {
       await page.goto(url, { waitUntil: 'load' });
     }
 
-    console.log(`${reused ? 'Reused' : 'Created'} page ${pageId}${url ? ` at ${url}` : ''}`);
+    console.error(`${reused ? 'Reused' : 'Created'} page ${pageId}${url ? ` at ${url}` : ''}`);
     return { pageId, page };
   }
 
@@ -612,7 +612,7 @@ export class GlobalProfile {
 
     await page.close();
     this.pages.delete(pageId);
-    console.log(`Closed page ${pageId}`);
+    console.error(`Closed page ${pageId}`);
     return true;
   }
 
@@ -673,12 +673,12 @@ export class GlobalProfile {
       // Release profile back to pool
       if (this.profileId) {
         this.profilePool.releaseProfile(this.profileId);
-        console.log(`[GlobalProfile] Released profile: ${this.profileId}`);
+        console.error(`[GlobalProfile] Released profile: ${this.profileId}`);
         this.profileId = null;
         this.profileDir = null;
       }
 
-      console.log('[GlobalProfile] Profile closed');
+      console.error('[GlobalProfile] Profile closed');
     }
   }
 
@@ -731,7 +731,7 @@ export class GlobalProfile {
         this.context = null;
         this.pages.clear();
         contextClosed = true;
-        console.log(`[GlobalProfile] Closed context for profile: ${profileId}`);
+        console.error(`[GlobalProfile] Closed context for profile: ${profileId}`);
       } catch (error) {
         console.error(`[GlobalProfile] Error closing context: ${error}`);
       }

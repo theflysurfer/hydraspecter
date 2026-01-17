@@ -91,7 +91,7 @@ function normalizeSelector(selector: string): string {
 
   // Log transformation if changed
   if (normalized !== selector) {
-    console.log(`[Selector] Normalized: "${selector}" → "${normalized}"`);
+    console.error(`[Selector] Normalized: "${selector}" → "${normalized}"`);
   }
 
   return normalized;
@@ -223,7 +223,7 @@ export class BrowserTools {
 
     // Log if detection triggered
     if (result.detected) {
-      console.log(`[DetectionMonitor] ${result.type || 'detection'}: ${result.details} (confidence: ${result.confidence})`);
+      console.error(`[DetectionMonitor] ${result.type || 'detection'}: ${result.details} (confidence: ${result.confidence})`);
     }
 
     return result.shouldHumanize;
@@ -2060,7 +2060,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               );
 
               if (isSessionRequired && mode === 'incognito') {
-                console.log(`[AUTO] Detected session-required site (${hostname}), using persistent mode instead of incognito`);
+                console.error(`[AUTO] Detected session-required site (${hostname}), using persistent mode instead of incognito`);
                 mode = 'persistent';
               }
             } catch {
@@ -2915,12 +2915,12 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
       if (url && mode !== 'incognito' && requiresAuth(url)) {
         const currentProfile = this.globalProfile.getProfileId();
         if (currentProfile !== 'pool-0') {
-          console.log(`[AutoSwitch] Domain requires auth, switching to pool-0...`);
+          console.error(`[AutoSwitch] Domain requires auth, switching to pool-0...`);
           const switchResult = await switchToAuthProfile();
           if (switchResult.success) {
             this.globalProfile = getGlobalProfile();
             autoSwitched = true;
-            console.log(`[AutoSwitch] Switched from ${switchResult.previousProfile} to pool-0`);
+            console.error(`[AutoSwitch] Switched from ${switchResult.previousProfile} to pool-0`);
           } else {
             console.warn(`[AutoSwitch] Failed to switch to pool-0: ${switchResult.error}`);
           }
@@ -2956,10 +2956,10 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         // Clean up globalPages when page is closed
         page.on('close', () => {
           this.globalPages.delete(pageId);
-          console.log(`[Incognito] Page ${pageId} closed, cleaned up from globalPages`);
+          console.error(`[Incognito] Page ${pageId} closed, cleaned up from globalPages`);
         });
 
-        console.log(`[Incognito] Created fresh context (no cookies, no history)`);
+        console.error(`[Incognito] Created fresh context (no cookies, no history)`);
       } else {
         // Use persistent global profile (default)
         const result = await this.globalProfile.createPage();
@@ -2970,7 +2970,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         // Clean up globalPages when page is closed
         page.on('close', () => {
           this.globalPages.delete(pageId);
-          console.log(`[GlobalProfile] Page ${pageId} closed, cleaned up from globalPages`);
+          console.error(`[GlobalProfile] Page ${pageId} closed, cleaned up from globalPages`);
         });
       }
 
@@ -2988,7 +2988,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         settings = this.domainIntelligence.getSettings(url);
         authRequired = requiresAuth(url);
 
-        console.log(`[${mode === 'incognito' ? 'Incognito' : 'GlobalProfile'}] Creating page for ${domain} (protection level: ${protectionLevel}, authRequired: ${authRequired})`);
+        console.error(`[${mode === 'incognito' ? 'Incognito' : 'GlobalProfile'}] Creating page for ${domain} (protection level: ${protectionLevel}, authRequired: ${authRequired})`);
 
         // Warn if auth-required domain but not using pool-0 (the synced profile)
         const currentProfile = this.globalProfile.getProfileId();
@@ -3241,7 +3241,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
       if (detectionResult.detected) {
         // Report detection to domain intelligence
         const newLevel = this.domainIntelligence.reportDetection(url);
-        console.log(`[Navigate] Detection on ${url}: ${detectionResult.type} (new level: ${newLevel})`);
+        console.error(`[Navigate] Detection on ${url}: ${detectionResult.type} (new level: ${newLevel})`);
 
         return {
           success: true,
