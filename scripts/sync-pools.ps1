@@ -7,8 +7,8 @@
     from Chrome to Chromium. Instead, log in once on pool-0 in HydraSpecter,
     then use this script to sync to other pools.
 
-    Syncs: Cookies, History, Bookmarks, Web Data, Preferences, Local State
-    This makes the browser look "lived in" for anti-detection.
+    Syncs: Cookies, Local Storage, History, Bookmarks, Web Data, Preferences, Local State
+    This makes the browser look "lived in" for anti-detection and preserves sessions.
 #>
 
 param(
@@ -19,7 +19,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Files to sync for anti-detection (makes browser look "lived in")
+# Files to sync for session persistence and anti-detection
 $SyncFiles = @(
     @{ Src = "Default\Network\Cookies"; Required = $true },
     @{ Src = "Local State"; Required = $false },
@@ -28,6 +28,13 @@ $SyncFiles = @(
     @{ Src = "Default\Web Data"; Required = $false },
     @{ Src = "Default\Bookmarks"; Required = $false },
     @{ Src = "Default\Preferences"; Required = $false }
+)
+
+# Directories to sync (recursive copy)
+$SyncDirs = @(
+    @{ Src = "Default\Local Storage"; Required = $false },
+    @{ Src = "Default\IndexedDB"; Required = $false },
+    @{ Src = "Default\Session Storage"; Required = $false }
 )
 
 $sourceDir = Join-Path $ProfilesDir "pool-$SourcePool"
@@ -53,6 +60,9 @@ foreach ($i in $TargetPools) {
 
     try {
         $fileCount = 0
+        $dirCount = 0
+
+        # Sync files
         foreach ($file in $SyncFiles) {
             $srcPath = Join-Path $sourceDir $file.Src
             $destPath = Join-Path $targetDir $file.Src
@@ -72,8 +82,34 @@ foreach ($i in $TargetPools) {
             $fileCount++
         }
 
+        # Sync directories (Local Storage, IndexedDB, Session Storage)
+        foreach ($dir in $SyncDirs) {
+            $srcPath = Join-Path $sourceDir $dir.Src
+            $destPath = Join-Path $targetDir $dir.Src
+
+            if (-not (Test-Path $srcPath)) {
+                if ($dir.Required) { throw "Required directory missing: $($dir.Src)" }
+                continue
+            }
+
+            # Remove existing target directory to avoid conflicts
+            if (Test-Path $destPath) {
+                Remove-Item -Path $destPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+
+            # Create parent directory if needed
+            $destParent = Split-Path $destPath
+            if (-not (Test-Path $destParent)) {
+                New-Item -ItemType Directory -Path $destParent -Force | Out-Null
+            }
+
+            # Copy entire directory
+            Copy-Item -Path $srcPath -Destination $destPath -Recurse -Force
+            $dirCount++
+        }
+
         $size = [math]::Round((Get-Item (Join-Path $targetDir "Default\Network\Cookies")).Length / 1KB)
-        Write-Host "  OK pool-${i} ($size KB, $fileCount files)" -ForegroundColor Green
+        Write-Host "  OK pool-${i} ($size KB, $fileCount files, $dirCount dirs)" -ForegroundColor Green
         $synced++
     } catch {
         Write-Host "  FAIL pool-${i}: $($_.Exception.Message)" -ForegroundColor Red

@@ -351,9 +351,19 @@ const SYNC_FILES = [
 ];
 
 /**
+ * Directories to sync between pools for session persistence.
+ * Contains localStorage, IndexedDB, and sessionStorage data.
+ */
+const SYNC_DIRS = [
+  { src: 'Default/Local Storage', required: false },
+  { src: 'Default/IndexedDB', required: false },
+  { src: 'Default/Session Storage', required: false },
+];
+
+/**
  * Sync session data from one pool to all other pools.
  * Called automatically when a browser closes.
- * Syncs cookies, history, and other anti-detection files.
+ * Syncs cookies, localStorage, history, and other anti-detection files.
  * Skips pools that are currently locked (in use).
  */
 export async function syncPoolToOthers(sourcePoolId: string): Promise<{ synced: number; skipped: number }> {
@@ -372,9 +382,9 @@ export async function syncPoolToOthers(sourcePoolId: string): Promise<{ synced: 
   let synced = 0;
   let skipped = 0;
 
-  // Get all pools except source
+  // Get all pools except source (only pool-0 to pool-9, not backups)
   const pools = fs.readdirSync(baseDir)
-    .filter(d => d.startsWith('pool-') && d !== sourcePoolId);
+    .filter(d => /^pool-\d$/.test(d) && d !== sourcePoolId);
 
   for (const pool of pools) {
     // Check if pool is locked
@@ -388,7 +398,9 @@ export async function syncPoolToOthers(sourcePoolId: string): Promise<{ synced: 
 
     try {
       let filesSynced = 0;
+      let dirsSynced = 0;
 
+      // Sync individual files
       for (const file of SYNC_FILES) {
         const srcPath = path.join(sourceDir, file.src);
         const destPath = path.join(targetDir, file.src);
@@ -410,7 +422,29 @@ export async function syncPoolToOthers(sourcePoolId: string): Promise<{ synced: 
         filesSynced++;
       }
 
-      if (filesSynced > 0) {
+      // Sync directories (Local Storage, IndexedDB, Session Storage)
+      for (const dir of SYNC_DIRS) {
+        const srcPath = path.join(sourceDir, dir.src);
+        const destPath = path.join(targetDir, dir.src);
+
+        if (!fs.existsSync(srcPath)) {
+          if (dir.required) {
+            throw new Error(`Required directory missing: ${dir.src}`);
+          }
+          continue;
+        }
+
+        // Remove existing target directory to avoid conflicts
+        if (fs.existsSync(destPath)) {
+          fs.rmSync(destPath, { recursive: true, force: true });
+        }
+
+        // Copy entire directory
+        copyDirSync(srcPath, destPath);
+        dirsSynced++;
+      }
+
+      if (filesSynced > 0 || dirsSynced > 0) {
         synced++;
       }
     } catch (error) {
