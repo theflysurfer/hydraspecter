@@ -301,6 +301,8 @@ Sessions persist across all pools. Just use direct workspace URLs:
 
       case 'browser_create':
         if (target) result['url'] = target;
+        // US-002: Backend is NOT set by meta-tool (allows auto-selection in tools.ts)
+        // result.backend should be undefined here unless explicitly set by user in options
         break;
 
       case 'browser_evaluate':

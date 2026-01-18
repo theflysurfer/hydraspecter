@@ -2121,6 +2121,9 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
       switch (name) {
         case 'browser_create': {
+          // US-004: Permanent debug logs for backend selection tracing
+          console.error(`[BackendSelection] Input: url=${args.url ?? 'none'}, requestedBackend=${args.backend ?? 'none'}`);
+
           // Auto-detect session-required sites
           const sessionRequiredDomains = [
             'notion.so', 'notion.com',
@@ -2157,15 +2160,17 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               // Auto backend: use backend rules to determine which backend to use
               if (backend === 'auto') {
                 const rulesBackend = getBackendForUrl(args.url);
-                console.error(`[AUTO] Backend rules selected: ${rulesBackend} for ${hostname}`);
+                console.error(`[BackendSelection] Rules check: ${hostname} → ${rulesBackend}`);
                 backend = rulesBackend;
               }
-            } catch {
-              // Invalid URL, keep original mode
+            } catch (error) {
+              // Invalid URL, keep original mode/backend
+              console.error(`[BackendSelection] URL parsing error: ${error instanceof Error ? error.message : error}`);
             }
           }
 
           // Handle SeleniumBase backend (either explicit or selected by rules)
+          console.error(`[BackendSelection] Final: using ${backend} for ${args.url ?? 'no URL'}`);
           if (backend === 'seleniumbase') {
             result = await this.createSeleniumBasePage(args.url, args.headless);
             break;
