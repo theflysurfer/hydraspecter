@@ -300,8 +300,8 @@ browser({
 2. Navigates to `perplexity.ai/library`
 3. Scrolls to load all threads (infinite scroll)
 4. Skips already exported URLs (from tracker)
-5. Exports each new thread and saves immediately to tracker
-6. Creates `_index.md` with ALL exported threads
+5. Exports each new thread (Markdown + raw JSON) and saves immediately to tracker
+6. Creates `_index.md` (table of contents by month), `_index.json` (searchable metadata)
 
 **Python CLI alternative:**
 ```bash
@@ -311,10 +311,33 @@ python scripts/export_perplexity_hydra.py [--limit N] [--force] [--show-browser]
 **Output structure:**
 ```
 exports/perplexity/
-├── _index.md                           # Index with links to all threads
-├── thread-title-abc123.md              # Individual thread exports
+├── _index.md                           # Table of contents grouped by month, with tags
+├── _index.json                         # Searchable JSON index (title, date, excerpt, tags)
+├── thread-title-abc123.md              # Formatted Markdown export
 ├── another-thread-def456.md
-└── ...
+└── raw/                                # Raw JSON data (overwritten each export)
+    ├── thread-title-abc123.json        # Raw conversation data
+    └── another-thread-def456.json
+```
+
+**_index.json format:**
+```json
+{
+  "exportDate": "2026-01-18T20:00:00.000Z",
+  "totalThreads": 150,
+  "threads": [
+    {
+      "id": "abc123",
+      "title": "Thread Title",
+      "url": "https://perplexity.ai/search/abc123",
+      "date": "2026-01-15",
+      "excerpt": "First 200 characters of the answer...",
+      "tags": ["javascript", "react", "api"],
+      "filename": "thread-title-abc123.md",
+      "rawFilename": "thread-title-abc123.json"
+    }
+  ]
+}
 ```
 
 **Prerequisites:**

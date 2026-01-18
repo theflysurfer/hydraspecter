@@ -169,6 +169,17 @@ export interface PerplexityThread {
   sources: (string | PerplexitySource)[];
 }
 
+export interface PerplexityIndexEntry {
+  id: string;
+  title: string;
+  url: string;
+  date?: string;
+  excerpt: string;
+  tags: string[];
+  filename: string;
+  rawFilename: string;
+}
+
 export interface PerplexityExportResult {
   success: boolean;
   threadsFound: number;
@@ -372,6 +383,182 @@ export function createIndex(threads: PerplexityThread[], exportDir: string): str
     if (thread.date) content += ` - ${thread.date}`;
     content += `\n`;
   });
+
+  fs.writeFileSync(indexPath, content, 'utf-8');
+  return indexPath;
+}
+
+/**
+ * Ensure raw export directory exists
+ */
+export function ensureRawDir(exportDir: string): string {
+  const rawDir = path.join(exportDir, 'raw');
+  if (!fs.existsSync(rawDir)) {
+    fs.mkdirSync(rawDir, { recursive: true });
+  }
+  return rawDir;
+}
+
+/**
+ * Generate safe filename for JSON (same as markdown but .json extension)
+ */
+export function safeJsonFilename(title: string, id: string): string {
+  const safe = title
+    .toLowerCase()
+    .replace(/[^a-z0-9àâäéèêëïîôùûüç\s-]/gi, '')
+    .replace(/\s+/g, '-')
+    .slice(0, 50);
+  return `${safe}-${id.slice(-8)}.json`;
+}
+
+/**
+ * Save thread as raw JSON to raw/ subdirectory
+ */
+export function saveThreadJson(thread: PerplexityThread, exportDir: string): string {
+  const rawDir = ensureRawDir(exportDir);
+  const filename = safeJsonFilename(thread.title, thread.id);
+  const filepath = path.join(rawDir, filename);
+  fs.writeFileSync(filepath, JSON.stringify(thread, null, 2), 'utf-8');
+  return filepath;
+}
+
+/**
+ * Extract tags from thread content using common patterns
+ */
+export function extractTags(thread: PerplexityThread): string[] {
+  const tags: Set<string> = new Set();
+
+  // Combine all text content
+  const allText = [
+    thread.title,
+    ...thread.questions,
+    ...thread.answers
+  ].join(' ').toLowerCase();
+
+  // Common technical/topic patterns
+  const tagPatterns = [
+    { pattern: /\b(javascript|js|typescript|ts|python|java|rust|go|ruby|php|c\+\+|c#)\b/gi, normalize: (m: string) => m.toLowerCase() },
+    { pattern: /\b(react|vue|angular|svelte|next\.?js|nuxt)\b/gi, normalize: (m: string) => m.toLowerCase().replace('.', '') },
+    { pattern: /\b(api|rest|graphql|websocket|http)\b/gi, normalize: (m: string) => m.toLowerCase() },
+    { pattern: /\b(docker|kubernetes|k8s|aws|azure|gcp)\b/gi, normalize: (m: string) => m.toLowerCase() },
+    { pattern: /\b(sql|postgres|mysql|mongodb|redis)\b/gi, normalize: (m: string) => m.toLowerCase() },
+    { pattern: /\b(machine learning|ml|ai|llm|gpt|claude)\b/gi, normalize: (m: string) => m.toLowerCase().replace(' ', '-') },
+    { pattern: /\b(css|html|tailwind|sass|scss)\b/gi, normalize: (m: string) => m.toLowerCase() },
+    { pattern: /\b(git|github|gitlab)\b/gi, normalize: (m: string) => m.toLowerCase() },
+    { pattern: /\b(linux|windows|macos|ubuntu)\b/gi, normalize: (m: string) => m.toLowerCase() },
+    { pattern: /\b(node\.?js|deno|bun)\b/gi, normalize: (m: string) => m.toLowerCase().replace('.', '') },
+  ];
+
+  for (const { pattern, normalize } of tagPatterns) {
+    const matches = allText.match(pattern);
+    if (matches) {
+      matches.forEach(m => tags.add(normalize(m)));
+    }
+  }
+
+  return Array.from(tags).slice(0, 10); // Max 10 tags
+}
+
+/**
+ * Create excerpt from thread content (first 200 characters)
+ */
+export function createExcerpt(thread: PerplexityThread): string {
+  // Use first answer or first question as excerpt
+  const content = thread.answers[0] || thread.questions[0] || thread.title;
+  return content
+    .replace(/\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 200);
+}
+
+/**
+ * Create index entry for a thread
+ */
+export function createIndexEntry(thread: PerplexityThread): PerplexityIndexEntry {
+  return {
+    id: thread.id,
+    title: thread.title,
+    url: thread.url,
+    date: thread.date,
+    excerpt: createExcerpt(thread),
+    tags: extractTags(thread),
+    filename: safeFilename(thread.title, thread.id),
+    rawFilename: safeJsonFilename(thread.title, thread.id)
+  };
+}
+
+/**
+ * Create JSON index with searchable metadata
+ */
+export function createJsonIndex(threads: PerplexityThread[], exportDir: string): string {
+  const indexPath = path.join(exportDir, '_index.json');
+  const entries = threads.map(createIndexEntry);
+
+  const index = {
+    exportDate: new Date().toISOString(),
+    totalThreads: threads.length,
+    threads: entries
+  };
+
+  fs.writeFileSync(indexPath, JSON.stringify(index, null, 2), 'utf-8');
+  return indexPath;
+}
+
+/**
+ * Create enhanced Markdown index file with table of contents
+ */
+export function createEnhancedIndex(threads: PerplexityThread[], exportDir: string): string {
+  const indexPath = path.join(exportDir, '_index.md');
+  let content = `# Perplexity Export Index\n\n`;
+  content += `> **Exported**: ${new Date().toISOString()}\n`;
+  content += `> **Total threads**: ${threads.length}\n\n`;
+  content += `---\n\n`;
+
+  // Table of contents with date groups
+  const byMonth = new Map<string, PerplexityThread[]>();
+
+  threads.forEach(thread => {
+    let monthKey = 'Unknown Date';
+    if (thread.date) {
+      const date = new Date(thread.date);
+      if (!isNaN(date.getTime())) {
+        monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      }
+    }
+    if (!byMonth.has(monthKey)) {
+      byMonth.set(monthKey, []);
+    }
+    byMonth.get(monthKey)!.push(thread);
+  });
+
+  // Sort months descending (newest first)
+  const sortedMonths = Array.from(byMonth.keys()).sort().reverse();
+
+  content += `## Table of Contents\n\n`;
+
+  sortedMonths.forEach(month => {
+    const monthThreads = byMonth.get(month)!;
+    const monthName = month === 'Unknown Date' ? 'Unknown Date' :
+      new Date(month + '-01').toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+
+    content += `### ${monthName} (${monthThreads.length})\n\n`;
+
+    monthThreads.forEach(thread => {
+      const filename = safeFilename(thread.title, thread.id);
+      const tags = extractTags(thread);
+      const tagStr = tags.length > 0 ? ` \`${tags.slice(0, 3).join('` `')}\`` : '';
+      content += `- [${thread.title}](./${filename})${tagStr}\n`;
+    });
+
+    content += `\n`;
+  });
+
+  // Quick links section
+  content += `---\n\n`;
+  content += `## Quick Links\n\n`;
+  content += `- [JSON Index](./_index.json) - Machine-readable index with metadata\n`;
+  content += `- [Raw JSON](./raw/) - Raw conversation data\n`;
 
   fs.writeFileSync(indexPath, content, 'utf-8');
   return indexPath;

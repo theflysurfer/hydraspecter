@@ -3332,7 +3332,10 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               getThreadContentScript,
               ensureExportDir,
               saveThread,
+              saveThreadJson,
               createIndex,
+              createJsonIndex,
+              createEnhancedIndex,
               loadTracker,
               saveTracker,
               isAlreadyExported,
@@ -3482,9 +3485,11 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                     sources: content.sources || []
                   };
 
-                  // Save to file
+                  // Save to Markdown file
                   const filepath = saveThread(fullThread, exportDir);
-                  exportedThreads.push({ ...thread, filepath });
+                  // Save to raw JSON file (overwrites if exists)
+                  const jsonPath = saveThreadJson(fullThread, exportDir);
+                  exportedThreads.push({ ...fullThread, filepath, jsonPath });
 
                   // Mark as exported immediately (crash protection)
                   markExported(tracker, thread.url);
@@ -3520,16 +3525,31 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               await new Promise(r => setTimeout(r, 2000));
             }
 
-            // Step 5: Create index file with ALL exported threads (not just this session)
+            // Step 5: Create index files with ALL exported threads (not just this session)
+            // Build full thread objects for all exported threads (using exportedThreads for content)
             const allExportedUrls = new Set(tracker.exportedUrls);
             const allThreadsForIndex = threadList.threads.filter((t: any) =>
               allExportedUrls.has(t.url.split('?')[0]) || exportedThreads.some(e => e.id === t.id)
-            );
-            const indexPath = createIndex(allThreadsForIndex, exportDir);
+            ).map((t: any) => {
+              // Try to get full content from exportedThreads
+              const exported = exportedThreads.find(e => e.id === t.id);
+              return exported || {
+                ...t,
+                questions: [],
+                answers: [],
+                sources: []
+              };
+            });
+
+            // Create all index files
+            const mdIndexPath = createEnhancedIndex(allThreadsForIndex, exportDir);
+            const jsonIndexPath = createJsonIndex(allThreadsForIndex, exportDir);
+            // Keep legacy createIndex for backwards compatibility
+            createIndex(allThreadsForIndex, exportDir);
 
             // Final progress log
             console.error(`[Perplexity Export] Completed: Exported ${tracker.exportedUrls.length}/${threadList.total} threads`);
-            console.error(`[Perplexity Export] Index updated: ${indexPath}`);
+            console.error(`[Perplexity Export] Index files: ${mdIndexPath}, ${jsonIndexPath}`);
 
             // Check if all conversations are exported
             const allExported = tracker.exportedUrls.length >= threadList.total;
@@ -3546,7 +3566,13 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 permanentlyFailed,
                 allConversationsExported: allExported,
                 exportDir,
-                indexFile: indexPath,
+                indexFiles: {
+                  markdown: mdIndexPath,
+                  json: jsonIndexPath,
+                  rawDir: exportDir + '/raw'
+                },
+                // Legacy field for backwards compatibility
+                indexFile: mdIndexPath,
                 errors: errors.length > 0 ? errors : undefined,
                 note: `Exported ${exportedThreads.length} new threads (${skippedCount} skipped, ${retriedCount} retried, ${tracker.exportedUrls.length}/${threadList.total} total)`,
                 checkpoint: {
