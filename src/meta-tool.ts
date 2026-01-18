@@ -97,6 +97,7 @@ const ACTION_MAP: Record<string, string> = {
 
   // Export tools
   'export_perplexity': 'browser_export_perplexity',
+  'export_chatgpt': 'browser_export_chatgpt',
 };
 
 // Actions grouped by category for help (used in tool description)
@@ -138,7 +139,7 @@ export class MetaTool {
 • Endpoints: capture, list_endpoints, save_endpoint, get_endpoint
 • Devices: devices (list 90+ devices for mobile/tablet emulation)
 • Anti-detection: solve_turnstile (Cloudflare Turnstile auto-click)
-• Export: export_perplexity (batch export Perplexity threads to markdown)
+• Export: export_perplexity, export_chatgpt (request data export from ChatGPT settings)
 • Advanced: evaluate, batch, protection
 
 **Auth-Required Sites (Notion, Gmail, etc.):**

@@ -3484,6 +3484,131 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           break;
         }
 
+        case 'browser_export_chatgpt': {
+          // Trigger ChatGPT data export from settings page
+          // Navigates to settings → Data controls → Export data → Confirm
+          const seleniumInstance = this.seleniumBaseInstances.get(args.instanceId);
+          if (!seleniumInstance) {
+            result = {
+              success: false,
+              error: `SeleniumBase instance ${args.instanceId} not found. This action requires backend: "seleniumbase"`
+            };
+            break;
+          }
+
+          try {
+            const currentUrl = await seleniumInstance.page.url();
+
+            // Navigate to settings if not already there
+            if (!currentUrl.includes('/settings') && !currentUrl.includes('#settings')) {
+              console.error('[ChatGPT Export] Navigating to settings...');
+              await seleniumInstance.page.goto('https://chatgpt.com/#settings/DataControls');
+              await new Promise(r => setTimeout(r, 4000)); // Wait for modal to open
+            } else {
+              // Already on settings page, still wait a bit for content to load
+              await new Promise(r => setTimeout(r, 1000));
+            }
+
+            // Check if we're logged in by looking for the settings UI (prioritize positive check)
+            const settingsCheck = await seleniumInstance.page.evaluate(
+              `(function() { const text = document.body.innerText || ''; if (text.includes('Data controls') || text.includes('Gestion des données') || text.includes('Export data') || text.includes('Exporter les données')) { return JSON.stringify({ loggedIn: true }); } if (text.includes('Log in') || text.includes('Sign up') || text.includes('Connexion') || text.includes('Inscription')) { return JSON.stringify({ loggedIn: false, reason: 'Login/Signup buttons found' }); } return JSON.stringify({ loggedIn: false, reason: 'Data controls not found in page' }); })()`
+            );
+
+            // Handle null result from evaluate (page still loading)
+            if (settingsCheck === null || settingsCheck === undefined) {
+              result = {
+                success: false,
+                error: 'Page not fully loaded. Please wait and try again.'
+              };
+              break;
+            }
+
+            const loginStatus = typeof settingsCheck === 'string' ? JSON.parse(settingsCheck) : settingsCheck;
+
+            if (!loginStatus.loggedIn) {
+              result = {
+                success: false,
+                error: `Not logged in to ChatGPT. ${loginStatus.reason || 'Please login first.'} Hint: Use browser({ action: "create", target: "https://chatgpt.com" }) and login manually.`
+              };
+              break;
+            }
+
+            // Click on Data controls if not already there (supports EN/FR)
+            console.error('[ChatGPT Export] Looking for Data controls...');
+            const dataControlsClick = await seleniumInstance.page.evaluate(
+              `(function() { const elements = [...document.querySelectorAll('a, button, div[role="button"], span')]; const dataControls = elements.find(el => { const text = el.textContent?.trim() || ''; return text === 'Data controls' || text.includes('Data controls') || text === 'Gestion des données' || text.includes('Gestion des données'); }); if (dataControls) { dataControls.click(); return JSON.stringify({ clicked: true, text: dataControls.textContent?.trim() }); } return JSON.stringify({ clicked: false, availableOptions: elements.slice(0, 20).map(e => e.textContent?.trim()).filter(Boolean) }); })()`
+            );
+            const dcResult = typeof dataControlsClick === 'string' ? JSON.parse(dataControlsClick) : dataControlsClick;
+
+            if (!dcResult.clicked) {
+              // Maybe already on Data controls page, check for Export button
+              console.error('[ChatGPT Export] Data controls link not found, checking if already on page...');
+            } else {
+              console.error('[ChatGPT Export] Clicked Data controls');
+              await new Promise(r => setTimeout(r, 2000));
+            }
+
+            // Look for Export data button (supports EN/FR)
+            console.error('[ChatGPT Export] Looking for Export button...');
+            const exportClick = await seleniumInstance.page.evaluate(
+              `(function() { const elements = [...document.querySelectorAll('a, button, div[role="button"], span')]; const exportBtn = elements.find(el => { const text = el.textContent?.trim()?.toLowerCase() || ''; return text === 'export' || text === 'export data' || text.includes('export your data') || text === 'exporter' || text === 'exporter les données' || text.includes('exporter'); }); if (exportBtn) { exportBtn.click(); return JSON.stringify({ clicked: true, text: exportBtn.textContent?.trim() }); } return JSON.stringify({ clicked: false, availableButtons: elements.filter(e => e.tagName === 'BUTTON' || e.role === 'button').slice(0, 15).map(e => e.textContent?.trim()).filter(Boolean) }); })()`
+            );
+            const exportResult = typeof exportClick === 'string' ? JSON.parse(exportClick) : exportClick;
+
+            if (!exportResult.clicked) {
+              result = {
+                success: false,
+                error: `Export button not found on the page. Available buttons: ${exportResult.availableButtons?.join(', ') || 'none'}`
+              };
+              break;
+            }
+
+            console.error('[ChatGPT Export] Clicked Export button');
+            await new Promise(r => setTimeout(r, 2000));
+
+            // Look for confirm export button in the modal (supports EN/FR)
+            console.error('[ChatGPT Export] Looking for Confirm export button...');
+            const confirmClick = await seleniumInstance.page.evaluate(
+              `(function() { const elements = [...document.querySelectorAll('a, button, div[role="button"]')]; const confirmBtn = elements.find(el => { const text = el.textContent?.trim()?.toLowerCase() || ''; return text === 'confirm export' || text.includes('confirm') || text === 'confirmer' || text.includes('confirmer'); }); if (confirmBtn) { confirmBtn.click(); return JSON.stringify({ clicked: true, text: confirmBtn.textContent?.trim() }); } return JSON.stringify({ clicked: false, availableButtons: elements.filter(e => e.tagName === 'BUTTON' || e.role === 'button').slice(0, 15).map(e => e.textContent?.trim()).filter(Boolean) }); })()`
+            );
+            const confirmResult = typeof confirmClick === 'string' ? JSON.parse(confirmClick) : confirmClick;
+
+            if (!confirmResult.clicked) {
+              result = {
+                success: false,
+                error: `Confirm export button not found. The export dialog may not have opened. Available buttons: ${confirmResult.availableButtons?.join(', ') || 'none'}`
+              };
+              break;
+            }
+
+            console.error('[ChatGPT Export] Clicked Confirm export');
+            await new Promise(r => setTimeout(r, 2000));
+
+            // Verify the export was requested by checking for success message
+            const verifyExport = await seleniumInstance.page.evaluate(
+              `(function() { const text = document.body.innerText || ''; if (text.includes('export is being prepared') || text.includes('will be sent to your email') || text.includes('email will be sent') || text.includes('export requested') || text.includes("We've sent") || text.includes('envoyé') || text.includes('sera envoyé')) { return JSON.stringify({ success: true, message: 'Export requested successfully' }); } if (text.includes('error') || text.includes('failed') || text.includes('erreur') || text.includes('échoué')) { return JSON.stringify({ success: false, message: 'Export may have failed - check page for errors' }); } return JSON.stringify({ success: true, message: 'Export likely requested (no error detected)' }); })()`
+            );
+            const verifyResult = typeof verifyExport === 'string' ? JSON.parse(verifyExport) : verifyExport;
+
+            result = {
+              success: true,
+              data: {
+                status: 'export_requested',
+                email: 'Check your email (usually arrives in 2-30 minutes)',
+                verification: verifyResult.message,
+                note: 'ChatGPT will send a download link to your registered email address.'
+              }
+            };
+
+          } catch (error) {
+            result = {
+              success: false,
+              error: `ChatGPT export failed: ${error instanceof Error ? error.message : error}`
+            };
+          }
+          break;
+        }
+
         default:
           result = {
             success: false,
