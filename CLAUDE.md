@@ -321,6 +321,43 @@ exports/perplexity/
 - SeleniumBase backend required
 - Must be logged into Perplexity (session persists automatically)
 
+- `browser_export_chatgpt` - Request data export from ChatGPT settings
+- `browser_export_claude` - Request data export from Claude settings
+
+```javascript
+// Request ChatGPT data export (requires logged-in SeleniumBase session)
+browser({ action: "export_chatgpt", pageId: "abc" })
+
+// Request Claude data export (requires logged-in SeleniumBase session)
+browser({ action: "export_claude", pageId: "abc" })
+```
+
+**How it works (ChatGPT/Claude):**
+1. Navigates to settings page if not already there
+2. Clicks through to Data/Privacy section
+3. Clicks "Export Data" button
+4. Confirms export in modal
+5. Returns `{ status: "export_requested", email: "expected in 2-30 min" }`
+
+**Return value:**
+```json
+{
+  "status": "export_requested",
+  "email": "Check your email (usually arrives in 2-30 minutes)",
+  "verification": "Export requested successfully",
+  "note": "Download link will be sent to your registered email. Link expires in 24 hours."
+}
+```
+
+**Error cases:**
+- Not logged in → Clear error message with login hint
+- Button not found → Lists available buttons for debugging
+- Modal didn't open → Suggests retrying
+
+**Prerequisites:**
+- SeleniumBase backend required
+- Must be logged in (session persists automatically)
+
 ### Protection & Profiles (Playwright)
 - `browser_get_protection_level` / `browser_set_protection_level`
 - `browser_list_profiles` / `browser_release_profile`

@@ -3609,6 +3609,263 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           break;
         }
 
+        case 'browser_export_claude': {
+          // Trigger Claude data export from settings page
+          // Navigates to settings → Privacy → Export Data → Confirm
+          const seleniumInstance = this.seleniumBaseInstances.get(args.instanceId);
+          if (!seleniumInstance) {
+            result = {
+              success: false,
+              error: `SeleniumBase instance ${args.instanceId} not found. This action requires backend: "seleniumbase"`
+            };
+            break;
+          }
+
+          try {
+            const currentUrl = await seleniumInstance.page.url();
+
+            // Navigate to Claude if not already there
+            if (!currentUrl.includes('claude.ai')) {
+              console.error('[Claude Export] Navigating to Claude...');
+              await seleniumInstance.page.goto('https://claude.ai');
+              await new Promise(r => setTimeout(r, 3000));
+            }
+
+            // Check if we're logged in by looking for user-specific content
+            const loginCheck = await seleniumInstance.page.evaluate(
+              `(function() {
+                const text = document.body.innerText || '';
+                const hasGreeting = text.includes('Bon') || text.includes('Good') || text.includes('Hi,');
+                const hasNewChat = text.includes('Nouvelle conversation') || text.includes('New conversation') || text.includes('New chat');
+                const hasLogin = text.includes('Log in') || text.includes('Se connecter') || text.includes('Sign in');
+                if (hasLogin && !hasGreeting) {
+                  return JSON.stringify({ loggedIn: false, reason: 'Login page detected' });
+                }
+                if (hasGreeting || hasNewChat) {
+                  return JSON.stringify({ loggedIn: true });
+                }
+                return JSON.stringify({ loggedIn: false, reason: 'Could not detect logged-in state' });
+              })()`
+            );
+            const loginStatus = typeof loginCheck === 'string' ? JSON.parse(loginCheck) : loginCheck;
+
+            if (!loginStatus.loggedIn) {
+              result = {
+                success: false,
+                error: `Not logged in to Claude. ${loginStatus.reason || 'Please login first.'} Hint: Use browser({ action: "create", target: "https://claude.ai" }) and login manually.`
+              };
+              break;
+            }
+
+            // Step 1: Open sidebar if collapsed
+            console.error('[Claude Export] Checking if sidebar is open...');
+            const sidebarCheck = await seleniumInstance.page.evaluate(
+              `(function() {
+                const sidebarToggle = document.querySelector('[aria-label*="sidebar" i], [aria-label*="barre latérale" i]');
+                const sidebarVisible = document.body.innerText.includes('Discussions') ||
+                                       document.body.innerText.includes('Projects') ||
+                                       document.body.innerText.includes('Projets');
+                return JSON.stringify({ sidebarOpen: sidebarVisible, toggleFound: !!sidebarToggle });
+              })()`
+            );
+            const sidebarStatus = typeof sidebarCheck === 'string' ? JSON.parse(sidebarCheck) : sidebarCheck;
+
+            if (!sidebarStatus.sidebarOpen && sidebarStatus.toggleFound) {
+              console.error('[Claude Export] Opening sidebar...');
+              await seleniumInstance.page.evaluate(
+                `(function() {
+                  const toggle = document.querySelector('[aria-label*="sidebar" i], [aria-label*="barre latérale" i]');
+                  if (toggle) toggle.click();
+                })()`
+              );
+              await new Promise(r => setTimeout(r, 1500));
+            }
+
+            // Step 2: Click on user menu (bottom of sidebar - contains user name or "Plan")
+            console.error('[Claude Export] Opening user menu...');
+            const userMenuClick = await seleniumInstance.page.evaluate(
+              `(function() {
+                const buttons = [...document.querySelectorAll('button')];
+                const userBtn = buttons.find(btn => {
+                  const text = btn.textContent || '';
+                  return text.includes('Plan') || text.includes('Pro') || text.includes('Max') ||
+                         text.includes('Free') || text.includes('Gratuit');
+                });
+                if (userBtn) {
+                  userBtn.click();
+                  return JSON.stringify({ clicked: true, text: userBtn.textContent?.trim()?.substring(0, 50) });
+                }
+                return JSON.stringify({ clicked: false, availableButtons: buttons.slice(-10).map(b => b.textContent?.trim()?.substring(0, 30)).filter(Boolean) });
+              })()`
+            );
+            const userMenuResult = typeof userMenuClick === 'string' ? JSON.parse(userMenuClick) : userMenuClick;
+
+            if (!userMenuResult.clicked) {
+              result = {
+                success: false,
+                error: `User menu button not found. Make sure sidebar is open. Available buttons: ${userMenuResult.availableButtons?.join(', ') || 'none'}`
+              };
+              break;
+            }
+
+            console.error('[Claude Export] Clicked user menu');
+            await new Promise(r => setTimeout(r, 1500));
+
+            // Step 3: Click on Settings (Paramètres)
+            console.error('[Claude Export] Looking for Settings...');
+            const settingsClick = await seleniumInstance.page.evaluate(
+              `(function() {
+                const items = [...document.querySelectorAll('button, div[role="menuitem"], a')];
+                const settingsBtn = items.find(el => {
+                  const text = el.textContent?.trim()?.toLowerCase() || '';
+                  return text === 'settings' || text === 'paramètres' || text.includes('settings');
+                });
+                if (settingsBtn) {
+                  settingsBtn.click();
+                  return JSON.stringify({ clicked: true, text: settingsBtn.textContent?.trim() });
+                }
+                return JSON.stringify({ clicked: false, availableItems: items.slice(0, 15).map(e => e.textContent?.trim()?.substring(0, 30)).filter(Boolean) });
+              })()`
+            );
+            const settingsResult = typeof settingsClick === 'string' ? JSON.parse(settingsClick) : settingsClick;
+
+            if (!settingsResult.clicked) {
+              result = {
+                success: false,
+                error: `Settings button not found in user menu. Available items: ${settingsResult.availableItems?.join(', ') || 'none'}`
+              };
+              break;
+            }
+
+            console.error('[Claude Export] Clicked Settings');
+            await new Promise(r => setTimeout(r, 2000));
+
+            // Step 4: Click on Privacy tab (Confidentialité)
+            console.error('[Claude Export] Looking for Privacy tab...');
+            const privacyClick = await seleniumInstance.page.evaluate(
+              `(function() {
+                const items = [...document.querySelectorAll('button, a, div[role="tab"], nav button, nav a')];
+                const privacyBtn = items.find(el => {
+                  const text = el.textContent?.trim()?.toLowerCase() || '';
+                  return text === 'privacy' || text === 'confidentialité' || text.includes('privacy');
+                });
+                if (privacyBtn) {
+                  privacyBtn.click();
+                  return JSON.stringify({ clicked: true, text: privacyBtn.textContent?.trim() });
+                }
+                return JSON.stringify({ clicked: false, availableItems: items.slice(0, 20).map(e => e.textContent?.trim()?.substring(0, 30)).filter(Boolean) });
+              })()`
+            );
+            const privacyResult = typeof privacyClick === 'string' ? JSON.parse(privacyClick) : privacyClick;
+
+            if (!privacyResult.clicked) {
+              result = {
+                success: false,
+                error: `Privacy tab not found in settings. Available items: ${privacyResult.availableItems?.join(', ') || 'none'}`
+              };
+              break;
+            }
+
+            console.error('[Claude Export] Clicked Privacy tab');
+            await new Promise(r => setTimeout(r, 2000));
+
+            // Step 5: Click on Export Data button (Exporter les données)
+            console.error('[Claude Export] Looking for Export Data button...');
+            const exportClick = await seleniumInstance.page.evaluate(
+              `(function() {
+                const buttons = [...document.querySelectorAll('button')];
+                const exportBtn = buttons.find(btn => {
+                  const text = btn.textContent?.trim()?.toLowerCase() || '';
+                  return text === 'export data' || text === 'exporter les données' ||
+                         text.includes('export data') || text.includes('exporter');
+                });
+                if (exportBtn) {
+                  exportBtn.click();
+                  return JSON.stringify({ clicked: true, text: exportBtn.textContent?.trim() });
+                }
+                return JSON.stringify({ clicked: false, availableButtons: buttons.map(b => b.textContent?.trim()?.substring(0, 40)).filter(Boolean) });
+              })()`
+            );
+            const exportResult = typeof exportClick === 'string' ? JSON.parse(exportClick) : exportClick;
+
+            if (!exportResult.clicked) {
+              result = {
+                success: false,
+                error: `Export Data button not found on Privacy page. Available buttons: ${exportResult.availableButtons?.join(', ') || 'none'}`
+              };
+              break;
+            }
+
+            console.error('[Claude Export] Clicked Export Data button');
+            await new Promise(r => setTimeout(r, 2000));
+
+            // Step 6: Confirm export in modal (click "Export" / "Exporter")
+            console.error('[Claude Export] Looking for Confirm export button...');
+            const confirmClick = await seleniumInstance.page.evaluate(
+              `(function() {
+                const buttons = [...document.querySelectorAll('button')];
+                // Look for the confirm button in the modal (typically the rightmost/primary button)
+                const confirmBtn = buttons.find(btn => {
+                  const text = btn.textContent?.trim()?.toLowerCase() || '';
+                  // Match exactly "export" or "exporter" (not "export data" which is the trigger button)
+                  return (text === 'export' || text === 'exporter') && !text.includes('data') && !text.includes('données');
+                });
+                if (confirmBtn) {
+                  confirmBtn.click();
+                  return JSON.stringify({ clicked: true, text: confirmBtn.textContent?.trim() });
+                }
+                return JSON.stringify({ clicked: false, availableButtons: buttons.map(b => b.textContent?.trim()?.substring(0, 40)).filter(Boolean) });
+              })()`
+            );
+            const confirmResult = typeof confirmClick === 'string' ? JSON.parse(confirmClick) : confirmClick;
+
+            if (!confirmResult.clicked) {
+              result = {
+                success: false,
+                error: `Confirm export button not found in modal. The export dialog may not have opened. Available buttons: ${confirmResult.availableButtons?.join(', ') || 'none'}`
+              };
+              break;
+            }
+
+            console.error('[Claude Export] Clicked Confirm export');
+            await new Promise(r => setTimeout(r, 2000));
+
+            // Step 7: Verify export was requested
+            const verifyExport = await seleniumInstance.page.evaluate(
+              `(function() {
+                const text = document.body.innerText || '';
+                if (text.includes('Exportation démarrée') || text.includes('Export started') ||
+                    text.includes('export is being prepared') || text.includes('email will be sent') ||
+                    text.includes('sera envoyé') || text.includes('lien de téléchargement')) {
+                  return JSON.stringify({ success: true, message: 'Export requested successfully' });
+                }
+                if (text.includes('error') || text.includes('erreur') || text.includes('failed') || text.includes('échoué')) {
+                  return JSON.stringify({ success: false, message: 'Export may have failed - check page for errors' });
+                }
+                return JSON.stringify({ success: true, message: 'Export likely requested (no error detected)' });
+              })()`
+            );
+            const verifyResult = typeof verifyExport === 'string' ? JSON.parse(verifyExport) : verifyExport;
+
+            result = {
+              success: true,
+              data: {
+                status: 'export_requested',
+                email: 'Check your email (usually arrives in 2-30 minutes)',
+                verification: verifyResult.message,
+                note: 'Claude will send a download link to your registered email address. The link expires in 24 hours.'
+              }
+            };
+
+          } catch (error) {
+            result = {
+              success: false,
+              error: `Claude export failed: ${error instanceof Error ? error.message : error}`
+            };
+          }
+          break;
+        }
+
         default:
           result = {
             success: false,
