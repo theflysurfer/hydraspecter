@@ -3948,6 +3948,211 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           break;
         }
 
+        case 'browser_wait_export_email': {
+          // Monitor Gmail for export emails from ChatGPT or Claude
+          // Supports both DOM monitoring and polling approaches
+          const seleniumInstance = this.seleniumBaseInstances.get(args.instanceId);
+          if (!seleniumInstance) {
+            result = {
+              success: false,
+              error: `SeleniumBase instance ${args.instanceId} not found. This action requires backend: "seleniumbase"`
+            };
+            break;
+          }
+
+          try {
+            const {
+              getGmailSearchUrl,
+              getCheckEmailScript,
+              getClickEmailScript,
+              getExtractDownloadLinkScript,
+              ensureDownloadDir,
+              getExpectedFilenamePattern,
+              waitForDownloadFile,
+              DEFAULT_TIMEOUT,
+              DEFAULT_POLL_INTERVAL,
+            } = await import('./exporters/gmail-export-monitor.js');
+
+            const source = args.source as 'chatgpt' | 'claude';
+            if (!source || !['chatgpt', 'claude'].includes(source)) {
+              result = {
+                success: false,
+                error: `Invalid source: "${source}". Must be 'chatgpt' or 'claude'.`
+              };
+              break;
+            }
+
+            const timeout = args.timeout || DEFAULT_TIMEOUT;
+            const pollInterval = args.pollInterval || DEFAULT_POLL_INTERVAL;
+            const downloadDir = ensureDownloadDir(args.downloadDir);
+            const startTime = Date.now();
+
+            console.error(`[Gmail Export Monitor] Starting - source: ${source}, timeout: ${timeout}ms, pollInterval: ${pollInterval}ms`);
+
+            // Navigate to Gmail search for export emails
+            const searchUrl = getGmailSearchUrl(source);
+            const currentUrl = await seleniumInstance.page.url();
+
+            if (!currentUrl.includes('mail.google.com')) {
+              console.error(`[Gmail Export Monitor] Navigating to Gmail...`);
+              await seleniumInstance.page.goto(searchUrl);
+              await new Promise(r => setTimeout(r, 3000));
+            } else if (!currentUrl.includes('#search')) {
+              console.error(`[Gmail Export Monitor] Already on Gmail, navigating to search...`);
+              await seleniumInstance.page.goto(searchUrl);
+              await new Promise(r => setTimeout(r, 2000));
+            }
+
+            // Check if logged in to Gmail
+            const loginCheck = await seleniumInstance.page.evaluate(
+              `(function() {
+                const text = document.body.innerText || '';
+                if (text.includes('Connexion') || text.includes('Sign in') || text.includes('Log in')) {
+                  if (!text.includes('Boîte de réception') && !text.includes('Inbox') && !text.includes('mail')) {
+                    return JSON.stringify({ loggedIn: false, reason: 'Login page detected' });
+                  }
+                }
+                if (text.includes('Boîte de réception') || text.includes('Inbox') || text.includes('Recherche') || text.includes('Search')) {
+                  return JSON.stringify({ loggedIn: true });
+                }
+                return JSON.stringify({ loggedIn: false, reason: 'Could not detect Gmail inbox' });
+              })()`
+            );
+            const loginStatus = typeof loginCheck === 'string' ? JSON.parse(loginCheck) : loginCheck;
+
+            if (!loginStatus.loggedIn) {
+              result = {
+                success: false,
+                error: `Not logged in to Gmail. ${loginStatus.reason || 'Please login first.'} Hint: Use browser({ action: "create", target: "https://mail.google.com" }) and login manually.`
+              };
+              break;
+            }
+
+            // Polling loop to wait for export email
+            let emailFound = false;
+            let emailInfo: { sender?: string; subject?: string; rowIndex?: number } = {};
+
+            while (Date.now() - startTime < timeout) {
+              console.error(`[Gmail Export Monitor] Checking for export email... (elapsed: ${Math.round((Date.now() - startTime) / 1000)}s)`);
+
+              // Refresh search to get latest emails
+              await seleniumInstance.page.goto(searchUrl);
+              await new Promise(r => setTimeout(r, 2000));
+
+              // Check for matching email
+              const checkResult = await seleniumInstance.page.evaluate(getCheckEmailScript(source));
+              const checkData = typeof checkResult === 'string' ? JSON.parse(checkResult) : checkResult;
+
+              if (checkData.found) {
+                emailFound = true;
+                emailInfo = checkData;
+                console.error(`[Gmail Export Monitor] Export email found! Subject: ${checkData.subject}`);
+                break;
+              }
+
+              console.error(`[Gmail Export Monitor] No export email yet, waiting ${pollInterval / 1000}s...`);
+              await new Promise(r => setTimeout(r, pollInterval));
+            }
+
+            if (!emailFound) {
+              result = {
+                success: false,
+                error: `Timeout waiting for export email from ${source}. Waited ${Math.round(timeout / 60000)} minutes. (${Date.now() - startTime}ms)`
+              };
+              break;
+            }
+
+            // Click on the email to open it
+            console.error(`[Gmail Export Monitor] Opening email...`);
+            const clickResult = await seleniumInstance.page.evaluate(getClickEmailScript(emailInfo.rowIndex || 0));
+            const clickData = typeof clickResult === 'string' ? JSON.parse(clickResult) : clickResult;
+
+            if (!clickData.clicked) {
+              result = {
+                success: false,
+                error: `Failed to click on export email: ${clickData.error}`
+              };
+              break;
+            }
+
+            // Wait for email to open
+            await new Promise(r => setTimeout(r, 2000));
+
+            // Extract download link from email
+            console.error(`[Gmail Export Monitor] Extracting download link...`);
+            const linkResult = await seleniumInstance.page.evaluate(getExtractDownloadLinkScript(source));
+            const linkData = typeof linkResult === 'string' ? JSON.parse(linkResult) : linkResult;
+
+            if (!linkData.found) {
+              result = {
+                success: false,
+                error: `Could not find download link in email. ${linkData.error || ''} Links checked: ${linkData.linksChecked || 0}`
+              };
+              break;
+            }
+
+            console.error(`[Gmail Export Monitor] Found download link: ${linkData.downloadUrl?.substring(0, 100)}...`);
+
+            // Click the download link
+            console.error(`[Gmail Export Monitor] Clicking download link...`);
+            await seleniumInstance.page.evaluate(`
+              (function() {
+                const links = [...document.querySelectorAll('a[href]')];
+                const link = links.find(a => a.href.includes('${linkData.downloadUrl?.split('?')[0]?.slice(-30) || 'download'}'));
+                if (link) {
+                  link.click();
+                  return true;
+                }
+                // Fallback: navigate to URL directly
+                window.location.href = '${linkData.downloadUrl}';
+                return true;
+              })()`
+            );
+
+            // Wait for download to complete
+            console.error(`[Gmail Export Monitor] Waiting for download to complete...`);
+            const filenamePattern = getExpectedFilenamePattern(source);
+            const downloadPath = await waitForDownloadFile(downloadDir, filenamePattern, 120000);
+
+            if (!downloadPath) {
+              result = {
+                success: true,
+                data: {
+                  status: 'link_found',
+                  downloadUrl: linkData.downloadUrl,
+                  linkText: linkData.linkText,
+                  emailSubject: emailInfo.subject,
+                  sender: emailInfo.sender,
+                  note: 'Download link was clicked but file was not detected in download directory. Check your browser downloads.',
+                  waitTimeMs: Date.now() - startTime
+                }
+              };
+              break;
+            }
+
+            console.error(`[Gmail Export Monitor] Download complete: ${downloadPath}`);
+
+            result = {
+              success: true,
+              data: {
+                status: 'downloaded',
+                downloadPath,
+                emailSubject: emailInfo.subject,
+                sender: emailInfo.sender,
+                downloadUrl: linkData.downloadUrl,
+                waitTimeMs: Date.now() - startTime
+              }
+            };
+
+          } catch (error) {
+            result = {
+              success: false,
+              error: `Gmail export monitor failed: ${error instanceof Error ? error.message : error}`
+            };
+          }
+          break;
+        }
+
         default:
           result = {
             success: false,

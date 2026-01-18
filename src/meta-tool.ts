@@ -99,6 +99,9 @@ const ACTION_MAP: Record<string, string> = {
   'export_perplexity': 'browser_export_perplexity',
   'export_chatgpt': 'browser_export_chatgpt',
   'export_claude': 'browser_export_claude',
+
+  // Gmail export monitoring
+  'wait_export_email': 'browser_wait_export_email',
 };
 
 // Actions grouped by category for help (used in tool description)
@@ -141,6 +144,7 @@ export class MetaTool {
 • Devices: devices (list 90+ devices for mobile/tablet emulation)
 • Anti-detection: solve_turnstile (Cloudflare Turnstile auto-click)
 • Export: export_perplexity, export_chatgpt, export_claude (request data export from settings)
+• Gmail: wait_export_email (monitor Gmail for export emails and auto-download)
 • Advanced: evaluate, batch, protection
 
 **Auth-Required Sites (Notion, Gmail, etc.):**

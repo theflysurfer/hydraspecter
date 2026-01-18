@@ -358,6 +358,72 @@ browser({ action: "export_claude", pageId: "abc" })
 - SeleniumBase backend required
 - Must be logged in (session persists automatically)
 
+- `browser_wait_export_email` - Monitor Gmail for export emails and auto-download
+
+```javascript
+// Wait for ChatGPT export email (after calling export_chatgpt)
+browser({ action: "wait_export_email", pageId: "abc", options: { source: "chatgpt" } })
+
+// Wait for Claude export email (after calling export_claude)
+browser({ action: "wait_export_email", pageId: "abc", options: { source: "claude" } })
+
+// With custom options
+browser({
+  action: "wait_export_email",
+  pageId: "abc",
+  options: {
+    source: "chatgpt",           // Required: 'chatgpt' or 'claude'
+    timeout: 1800000,            // Max wait time in ms (default: 30 minutes)
+    pollInterval: 30000,         // How often to check Gmail (default: 30 seconds)
+    downloadDir: "C:/exports"    // Where to save ZIP (default: ~/Downloads)
+  }
+})
+```
+
+**How it works:**
+1. Navigates to Gmail search with appropriate filter (from:openai.com or from:anthropic.com)
+2. Polls for new emails matching export criteria every 30 seconds
+3. When found, opens the email and extracts the download link
+4. Clicks the download link and waits for the ZIP file
+5. Returns the path to the downloaded file
+
+**Return value (success):**
+```json
+{
+  "status": "downloaded",
+  "downloadPath": "C:/Users/.../Downloads/conversations-2024-01-15.zip",
+  "emailSubject": "Your ChatGPT data export is ready",
+  "sender": "help@openai.com",
+  "waitTimeMs": 120000
+}
+```
+
+**Return value (link found but download not detected):**
+```json
+{
+  "status": "link_found",
+  "downloadUrl": "https://chatgpt.com/...",
+  "linkText": "Download your data",
+  "note": "Download link was clicked but file was not detected. Check browser downloads."
+}
+```
+
+**Full workflow example:**
+```javascript
+// 1. Request export from ChatGPT
+browser({ action: "export_chatgpt", pageId: "abc" })
+// Returns: { status: "export_requested", email: "Check your email in 2-30 minutes" }
+
+// 2. Wait for export email and auto-download
+browser({ action: "wait_export_email", pageId: "abc", options: { source: "chatgpt", timeout: 1800000 } })
+// Returns: { status: "downloaded", downloadPath: "C:/Users/.../conversations.zip" }
+```
+
+**Prerequisites:**
+- SeleniumBase backend required
+- Must be logged in to Gmail (via Google account in SeleniumBase profile)
+- Gmail must be in French or English (supports both)
+
 ### Protection & Profiles (Playwright)
 - `browser_get_protection_level` / `browser_set_protection_level`
 - `browser_list_profiles` / `browser_release_profile`
@@ -551,7 +617,8 @@ src/
 │   ├── seleniumbase-driver.ts       # SeleniumBase stdin/stdout bridge
 │   └── seleniumbase-http-driver.ts  # SeleniumBase HTTP bridge (persistent)
 ├── exporters/
-│   └── perplexity-exporter.ts       # Perplexity DOM scraping & markdown export
+│   ├── perplexity-exporter.ts       # Perplexity DOM scraping & markdown export
+│   └── gmail-export-monitor.ts      # Gmail monitoring for export emails
 ├── domain-intelligence.ts
 ├── api-bookmarks.ts
 ├── meta-tool.ts          # Unified browser tool (~2k tokens)
