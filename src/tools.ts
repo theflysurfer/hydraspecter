@@ -3316,7 +3316,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
         case 'browser_export_perplexity': {
           // Export all Perplexity conversations via DOM scraping
-          // Features: tracker for resume, skip already exported, incremental save
+          // Features: tracker for resume, skip already exported, incremental save, retry logic
           const seleniumInstance = this.seleniumBaseInstances.get(args.instanceId);
           if (!seleniumInstance) {
             result = {
@@ -3338,22 +3338,36 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               isAlreadyExported,
               markExported,
               markFailed,
+              getRetryCount,
+              incrementRetryCount,
+              clearRetryCount,
+              unmarkFailed,
+              MAX_RETRY_ATTEMPTS,
               DEFAULT_PERPLEXITY_EXPORT_DIR
             } = await import('./exporters/perplexity-exporter.js');
 
             // Load or create tracker
             const tracker = loadTracker();
+            // Initialize retryCounts if missing (migration from older tracker)
+            if (!tracker.retryCounts) {
+              tracker.retryCounts = {};
+            }
             const exportDir = ensureExportDir(args.exportDir || DEFAULT_PERPLEXITY_EXPORT_DIR);
             tracker.exportDir = exportDir;
             const errors: string[] = [];
             const exportedThreads: any[] = [];
             let skippedCount = 0;
+            let retriedCount = 0;
+
+            // resumeFromCheckpoint option (default: true)
+            const resumeFromCheckpoint = args.resumeFromCheckpoint !== false;
 
             // Force mode: re-export everything
             if (args.force) {
-              console.error('[Perplexity Export] Force mode: clearing exported URLs');
+              console.error('[Perplexity Export] Force mode: clearing exported URLs and retry counts');
               tracker.exportedUrls = [];
               tracker.failedUrls = [];
+              tracker.retryCounts = {};
               saveTracker(tracker);
             }
 
@@ -3402,11 +3416,21 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             const threadList = JSON.parse(listResult as string);
             tracker.totalFound = threadList.total;
             saveTracker(tracker);
-            console.error(`[Perplexity Export] Found ${threadList.total} threads (${tracker.exportedUrls.length} already exported)`);
+
+            // Calculate pending threads (not exported and not exceeded max retries)
+            const pendingThreads = threadList.threads.filter((t: any) => {
+              if (isAlreadyExported(tracker, t.url)) return false;
+              const retries = getRetryCount(tracker, t.url);
+              return retries < MAX_RETRY_ATTEMPTS;
+            });
+
+            console.error(`[Perplexity Export] Found ${threadList.total} threads (${tracker.exportedUrls.length} already exported, ${pendingThreads.length} pending)`);
 
             // Step 4: Export each thread (with limit, skipping already exported)
             const limit = args.limit || threadList.threads.length;
             const threadsToExport = threadList.threads.slice(0, limit);
+            const totalToProcess = threadsToExport.length;
+            let processedCount = 0;
 
             for (let i = 0; i < threadsToExport.length; i++) {
               const thread = threadsToExport[i];
@@ -3414,40 +3438,83 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               // Skip if already exported
               if (isAlreadyExported(tracker, thread.url)) {
                 skippedCount++;
+                processedCount++;
                 continue;
               }
 
-              console.error(`[Perplexity Export] Exporting ${i + 1}/${threadsToExport.length}: ${thread.title.slice(0, 50)}...`);
+              // Check retry count (only if resumeFromCheckpoint is true)
+              const currentRetries = getRetryCount(tracker, thread.url);
+              if (resumeFromCheckpoint && currentRetries >= MAX_RETRY_ATTEMPTS) {
+                console.error(`[Perplexity Export] Skipping "${thread.title.slice(0, 40)}..." (max ${MAX_RETRY_ATTEMPTS} retries exceeded)`);
+                skippedCount++;
+                processedCount++;
+                continue;
+              }
 
-              try {
-                // Navigate to thread
-                await seleniumInstance.page.goto(thread.url);
-                await new Promise(r => setTimeout(r, 3000));
+              // Progress logging: Exported X/Y threads
+              const exportedSoFar = tracker.exportedUrls.length;
+              console.error(`[Perplexity Export] Exported ${exportedSoFar}/${totalToProcess} threads... Processing: ${thread.title.slice(0, 40)}...`);
 
-                // Extract content
-                const contentResult = await seleniumInstance.page.evaluate(getThreadContentScript());
-                const content = JSON.parse(contentResult as string);
+              let exportSuccess = false;
+              let lastError: Error | null = null;
 
-                const fullThread = {
-                  ...thread,
-                  questions: content.questions || [],
-                  answers: content.answers || [],
-                  sources: content.sources || []
-                };
+              // Retry loop
+              for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS && !exportSuccess; attempt++) {
+                if (attempt > 1) {
+                  retriedCount++;
+                  console.error(`[Perplexity Export] Retry ${attempt}/${MAX_RETRY_ATTEMPTS} for "${thread.title.slice(0, 40)}..."`);
+                  await new Promise(r => setTimeout(r, 2000 * attempt)); // Exponential backoff
+                }
 
-                // Save to file
-                const filepath = saveThread(fullThread, exportDir);
-                exportedThreads.push({ ...thread, filepath });
+                try {
+                  // Navigate to thread
+                  await seleniumInstance.page.goto(thread.url);
+                  await new Promise(r => setTimeout(r, 3000));
 
-                // Mark as exported immediately (crash protection)
-                markExported(tracker, thread.url);
+                  // Extract content
+                  const contentResult = await seleniumInstance.page.evaluate(getThreadContentScript());
+                  const content = JSON.parse(contentResult as string);
 
-              } catch (threadError) {
-                const errorMsg = `Failed to export "${thread.title}": ${threadError instanceof Error ? threadError.message : threadError}`;
+                  const fullThread = {
+                    ...thread,
+                    questions: content.questions || [],
+                    answers: content.answers || [],
+                    sources: content.sources || []
+                  };
+
+                  // Save to file
+                  const filepath = saveThread(fullThread, exportDir);
+                  exportedThreads.push({ ...thread, filepath });
+
+                  // Mark as exported immediately (crash protection)
+                  markExported(tracker, thread.url);
+                  // Clear retry count on success
+                  clearRetryCount(tracker, thread.url);
+                  // Remove from failed list if it was there
+                  unmarkFailed(tracker, thread.url);
+
+                  exportSuccess = true;
+
+                } catch (threadError) {
+                  lastError = threadError instanceof Error ? threadError : new Error(String(threadError));
+                  incrementRetryCount(tracker, thread.url);
+
+                  // Check if it's a session/driver error that requires reinitialization
+                  const errorMsg = lastError.message.toLowerCase();
+                  if (errorMsg.includes('session') || errorMsg.includes('driver') || errorMsg.includes('connection')) {
+                    console.error(`[Perplexity Export] Session error detected, will retry: ${lastError.message}`);
+                  }
+                }
+              }
+
+              if (!exportSuccess && lastError) {
+                const errorMsg = `Failed to export "${thread.title}" after ${MAX_RETRY_ATTEMPTS} attempts: ${lastError.message}`;
                 errors.push(errorMsg);
                 console.error(`[Perplexity Export] ${errorMsg}`);
                 markFailed(tracker, thread.url);
               }
+
+              processedCount++;
 
               // Small delay between threads
               await new Promise(r => setTimeout(r, 2000));
@@ -3459,7 +3526,14 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               allExportedUrls.has(t.url.split('?')[0]) || exportedThreads.some(e => e.id === t.id)
             );
             const indexPath = createIndex(allThreadsForIndex, exportDir);
+
+            // Final progress log
+            console.error(`[Perplexity Export] Completed: Exported ${tracker.exportedUrls.length}/${threadList.total} threads`);
             console.error(`[Perplexity Export] Index updated: ${indexPath}`);
+
+            // Check if all conversations are exported
+            const allExported = tracker.exportedUrls.length >= threadList.total;
+            const permanentlyFailed = Object.values(tracker.retryCounts).filter(c => c >= MAX_RETRY_ATTEMPTS).length;
 
             result = {
               success: true,
@@ -3467,18 +3541,26 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 threadsFound: threadList.total,
                 threadsExported: exportedThreads.length,
                 threadsSkipped: skippedCount,
+                threadsRetried: retriedCount,
                 totalExported: tracker.exportedUrls.length,
+                permanentlyFailed,
+                allConversationsExported: allExported,
                 exportDir,
                 indexFile: indexPath,
                 errors: errors.length > 0 ? errors : undefined,
-                note: `Exported ${exportedThreads.length} new threads (${skippedCount} skipped, ${tracker.exportedUrls.length} total)`
+                note: `Exported ${exportedThreads.length} new threads (${skippedCount} skipped, ${retriedCount} retried, ${tracker.exportedUrls.length}/${threadList.total} total)`,
+                checkpoint: {
+                  resumable: true,
+                  pendingCount: threadList.total - tracker.exportedUrls.length - permanentlyFailed,
+                  failedCount: permanentlyFailed
+                }
               }
             };
 
           } catch (error) {
             result = {
               success: false,
-              error: `Perplexity export failed: ${error instanceof Error ? error.message : error}`
+              error: `Perplexity export failed: ${error instanceof Error ? error.message : error}. Hint: Use resumeFromCheckpoint: true to continue from last checkpoint`
             };
           }
           break;
