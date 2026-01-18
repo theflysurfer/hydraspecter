@@ -288,6 +288,20 @@ export class SeleniumBaseInstance implements IBrowserInstance {
       .filter(f => f.endsWith('.json'))
       .map(f => f.replace('.json', ''));
   }
+
+  /**
+   * Minimize browser window (prevents focus stealing)
+   */
+  async minimize(): Promise<void> {
+    await this.driver.sendCommand('minimize');
+  }
+
+  /**
+   * Restore/maximize browser window
+   */
+  async restore(): Promise<void> {
+    await this.driver.sendCommand('restore');
+  }
 }
 
 /**

@@ -30,6 +30,7 @@ const BRIDGE_URL = `http://127.0.0.1:${BRIDGE_PORT}`;
 const STATE_FILE = path.join(os.homedir(), '.hydraspecter', 'bridge-state.json');
 const HTTP_BRIDGE_SCRIPT = path.join(os.homedir(), '.hydraspecter', 'seleniumbase-http-bridge.py');
 const SESSION_STATE_DIR = path.join(os.homedir(), '.hydraspecter', 'sessions');
+const SELENIUMBASE_PROFILE_DIR = path.join(os.homedir(), '.hydraspecter', 'seleniumbase-profile');
 
 /** Session state data structure */
 export interface SessionState {
@@ -64,7 +65,8 @@ async function sendHttpCommand(action: string, params: Record<string, any> = {})
   }
 
   const result = await response.json();
-  if (result.error) {
+  // Handle null results (e.g., from JavaScript returning null)
+  if (result !== null && result !== undefined && result.error) {
     throw new Error(result.error);
   }
   return result;
@@ -302,6 +304,20 @@ export class SeleniumBaseHttpInstance implements IBrowserInstance {
       .map(f => f.replace('.json', ''));
   }
 
+  /**
+   * Minimize browser window (prevents focus stealing)
+   */
+  async minimize(): Promise<void> {
+    await sendHttpCommand('minimize');
+  }
+
+  /**
+   * Restore/maximize browser window
+   */
+  async restore(): Promise<void> {
+    await sendHttpCommand('restore');
+  }
+
   async close(): Promise<void> {
     // Just close the page, don't quit the driver
     await this.page.close();
@@ -335,6 +351,7 @@ export async function createSeleniumBaseHttpInstance(options?: {
     await sendHttpCommand('init', {
       headless: options?.headless ?? false,
       instanceId,
+      profileDir: SELENIUMBASE_PROFILE_DIR,
     });
     createdAt = new Date();
     console.error(`[SeleniumBase HTTP] Created new driver: ${instanceId}`);

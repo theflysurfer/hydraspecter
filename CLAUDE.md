@@ -95,68 +95,87 @@ SeleniumBase uses an **HTTP Bridge** pattern for persistence across MCP restarts
 ```
 
 - **HTTP Bridge**: Python HTTP server on port 47482 persists across MCP restarts
-- **State Injection**: Cookies/localStorage exported to JSON, re-injected on restart
-- **Sessions stored**: `~/.hydraspecter/sessions/{domain}.json`
+- **Persistent Chrome Profile**: `~/.hydraspecter/seleniumbase-profile/` stores all session data
+- **Automatic persistence**: Login once → session persists forever (no manual save needed)
 
 ## Session Management (SeleniumBase)
 
-Sessions are automatically saved and loaded for SeleniumBase instances.
+Sessions persist AUTOMATICALLY via a persistent Chrome profile directory (`user_data_dir`).
 
 ### How it works
 
-1. **First-time login**: Create browser, login manually, save session
-2. **Auto-load**: Next time you create a browser for that domain, session is auto-loaded
-3. **Refresh required**: After load, page auto-refreshes to apply cookies
+1. **First-time login**: Create browser, login manually, close browser
+2. **Next time**: Browser automatically reuses the same Chrome profile → already logged in!
+3. **No action needed**: Cookies, localStorage, IndexedDB all persist automatically
 
-### Session Actions
+### Why this works (vs JSON export)
 
-| Action | Description |
-|--------|-------------|
-| `save_session` | Export cookies + localStorage to `~/.hydraspecter/sessions/{domain}.json` |
-| `load_session` | Import session for a domain (auto-called on create if session exists) |
-| `list_sessions` | List all saved sessions |
+| Old approach (JSON) | New approach (Chrome profile) |
+|---------------------|-------------------------------|
+| Export cookies to JSON | Chrome stores everything natively |
+| LocalStorage missing | All storage types included |
+| Token rotation breaks it | Chrome handles token refresh |
+| Session binding fails | Same Chrome instance identity |
+
+**Google specifically** binds sessions to Chrome instance ID. JSON cookie injection CANNOT work.
 
 ### Workflow Example
 
 ```javascript
-// Step 1: First-time login to Google
-browser({ action: "create", target: "https://google.com", options: { backend: "seleniumbase" } })
-// → Login manually in the browser window
-browser({ action: "save_session", pageId: "abc" })
-// → Session saved to ~/.hydraspecter/sessions/google.com.json
+// Step 1: First-time login (ONE TIME ONLY)
+browser({ action: "create", target: "https://accounts.google.com", options: { backend: "seleniumbase" } })
+// → Login manually in the visible browser window
+// → Close browser when done
 
-// Step 2: Login to AI site (uses Google OAuth)
-browser({ action: "create", target: "https://claude.ai", options: { backend: "seleniumbase" } })
-browser({ action: "load_session", pageId: "abc", options: { domain: "google.com" } })
-browser({ action: "refresh", pageId: "abc" })
-// → Google cookies now available for OAuth
-// → Click "Continue with Google" button
-// → OAuth popup works because Google session is loaded
-browser({ action: "save_session", pageId: "abc" })
-// → Session saved to ~/.hydraspecter/sessions/claude.ai.json
+// Step 2: Every time after - AUTOMATIC!
+browser({ action: "create", target: "https://mail.google.com", options: { backend: "seleniumbase" } })
+// → Already logged in to Google! No login page shown.
 
-// Step 3: Next time - fully automatic!
-browser({ action: "create", target: "https://claude.ai", options: { backend: "seleniumbase" } })
-// → Auto-loads claude.ai.json → Already logged in!
+// Google OAuth also works:
+browser({ action: "create", target: "https://chatgpt.com", options: { backend: "seleniumbase" } })
+// → Click "Continue with Google" → OAuth uses same Google session
 ```
 
-### Saved Sessions Location
+### Profile Location
 
 ```
-~/.hydraspecter/sessions/
-├── google.com.json      # Google account (for OAuth)
-├── claude.ai.json       # Claude (Anthropic)
-├── chatgpt.com.json     # ChatGPT (OpenAI)
-├── perplexity.ai.json   # Perplexity
-└── {domain}.json        # Any other site
+~/.hydraspecter/seleniumbase-profile/
+├── Default/
+│   ├── Cookies          # Encrypted cookie database
+│   ├── Local Storage/   # localStorage data
+│   ├── IndexedDB/       # IndexedDB data
+│   ├── Session Storage/ # sessionStorage
+│   └── Preferences      # Chrome settings
+└── Local State          # Encryption keys
 ```
 
 ### Important Notes
 
-- **Google session first**: Load `google.com` session before OAuth-based logins
-- **2FA**: Some sites (ChatGPT) require 2FA code on first login - manual step
-- **Session expiry**: Sessions expire based on site's cookie policy (weeks/months)
-- **One profile**: SeleniumBase uses single Chrome profile (not 10 pools like Playwright)
+- **Single account**: The profile supports ONE account per service (one Google account, etc.)
+- **2FA remembered**: After first 2FA, Chrome remembers the device
+- **No expiration**: Sessions persist as long as the service allows (weeks/months)
+- **Fresh profile**: First use creates a new profile (not copied from system Chrome)
+
+### Legacy Session Actions (still available)
+
+The `save_session`/`load_session` actions still exist for edge cases, but are NOT needed for Google:
+
+| Action | Description |
+|--------|-------------|
+| `save_session` | Export cookies + localStorage to JSON (for non-Google sites) |
+| `load_session` | Import session from JSON (for non-Google sites) |
+| `list_sessions` | List JSON session files |
+
+**Note**: For Google, Amazon, ChatGPT, and other secure sites, just rely on the automatic Chrome profile persistence.
+
+### Auto-Save (Crash Protection)
+
+Sessions are **automatically saved to JSON after every navigation**. This provides crash protection:
+
+- Cookies and localStorage saved to `~/.hydraspecter/sessions/{domain}.json`
+- Flag `autoSaved: true` marks automatic saves
+- Protects against browser crashes or network issues
+- Combined with persistent Chrome profile, sessions are virtually indestructible
 
 ## Device Emulation (Mobile/Tablet Testing)
 
@@ -230,6 +249,10 @@ Detection triggers automatic level increment. Persists to `~/.hydraspecter/domai
 - `browser_refresh` - Reload page
 - `browser_evaluate` - Execute JavaScript
 
+### Window Control (SeleniumBase)
+- `browser_minimize` - Minimize browser window (prevents focus stealing)
+- `browser_restore` - Restore/maximize browser window
+
 ### Monitoring (Playwright only)
 - `browser_get_network_logs` - XHR/fetch requests
 - `browser_get_console_logs` - Console output
@@ -244,6 +267,59 @@ Detection triggers automatic level increment. Persists to `~/.hydraspecter/domai
 - `browser_save_session` - Export cookies/localStorage to JSON file
 - `browser_load_session` - Import session for a domain
 - `browser_list_sessions` - List all saved sessions
+
+### Export Tools (SeleniumBase)
+- `browser_export_perplexity` - Batch export all Perplexity threads to markdown
+
+```javascript
+// Export all Perplexity conversations (requires logged-in SeleniumBase session)
+browser({ action: "export_perplexity", pageId: "abc" })
+
+// With options
+browser({
+  action: "export_perplexity",
+  pageId: "abc",
+  options: {
+    exportDir: "C:/custom/path",  // Default: exports/perplexity/ in Fetch GPT chats repo
+    limit: 10,                     // Export only first 10 threads
+    maxScrolls: 100,               // Max scroll iterations to load threads
+    loadAll: true,                 // Scroll to load all threads (default: true)
+    force: false                   // Re-export all (ignore tracker, default: false)
+  }
+})
+```
+
+**Features:**
+- **Resume support**: Tracker file at `~/.hydraspecter/perplexity-export-tracker.json`
+- **Skip already exported**: Automatically skips previously exported URLs
+- **Crash protection**: Progress saved after each successful export
+- **Auto-recovery**: Session errors trigger automatic driver reinitialization
+
+**How it works:**
+1. Loads tracker file (creates if missing)
+2. Navigates to `perplexity.ai/library`
+3. Scrolls to load all threads (infinite scroll)
+4. Skips already exported URLs (from tracker)
+5. Exports each new thread and saves immediately to tracker
+6. Creates `_index.md` with ALL exported threads
+
+**Python CLI alternative:**
+```bash
+python scripts/export_perplexity_hydra.py [--limit N] [--force] [--show-browser]
+```
+
+**Output structure:**
+```
+exports/perplexity/
+├── _index.md                           # Index with links to all threads
+├── thread-title-abc123.md              # Individual thread exports
+├── another-thread-def456.md
+└── ...
+```
+
+**Prerequisites:**
+- SeleniumBase backend required
+- Must be logged into Perplexity (session persists automatically)
 
 ### Protection & Profiles (Playwright)
 - `browser_get_protection_level` / `browser_set_protection_level`
@@ -297,6 +373,17 @@ browser_click({ position: { x: 100, y: 200 } })  // Or coordinates
 
 ### Cross-origin iframe (Google Sign-In)
 Use `position` parameter with coordinates from `browser_evaluate`.
+
+### SeleniumBase session not persisting (login required every time)
+
+**Cause**: The HTTP bridge reuses an OLD driver created BEFORE the profileDir fix was applied.
+
+**Solution**: Force driver reinitialization by sending `quit` command:
+```bash
+curl -X POST http://127.0.0.1:47482 -H "Content-Type: application/json" -d '{"action": "quit", "params": {}}'
+```
+
+Then recreate the browser - it will now use the persistent profile.
 
 ### Cloudflare Turnstile blocks access
 
@@ -402,14 +489,15 @@ In `~/.claude.json`:
 ```
 ~/.hydraspecter/
 ├── profiles/pool-{0-9}/           # 10 concurrent session pools (Playwright)
-├── sessions/                      # SeleniumBase session files
-│   ├── google.com.json            # Cookies + localStorage per domain
-│   ├── claude.ai.json
-│   └── chatgpt.com.json
+├── seleniumbase-profile/          # SeleniumBase persistent Chrome profile
+│   ├── Default/                   # Chrome user data (cookies, localStorage, etc.)
+│   └── Local State                # Encryption keys
+├── sessions/                      # Legacy JSON session files (optional)
 ├── seleniumbase-http-bridge.py    # HTTP bridge Python script
 ├── bridge-state.json              # HTTP bridge state (PID, port)
 ├── domain-intelligence.json       # Protection levels
 ├── api-bookmarks.json             # Saved API endpoints
+├── perplexity-export-tracker.json # Export progress tracker (resume support)
 └── locks/                         # Pool lock files (prevent conflicts)
 ```
 
@@ -425,6 +513,8 @@ src/
 ├── backends/
 │   ├── seleniumbase-driver.ts       # SeleniumBase stdin/stdout bridge
 │   └── seleniumbase-http-driver.ts  # SeleniumBase HTTP bridge (persistent)
+├── exporters/
+│   └── perplexity-exporter.ts       # Perplexity DOM scraping & markdown export
 ├── domain-intelligence.ts
 ├── api-bookmarks.ts
 ├── meta-tool.ts          # Unified browser tool (~2k tokens)

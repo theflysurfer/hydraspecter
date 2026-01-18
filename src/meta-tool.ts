@@ -27,6 +27,10 @@ const ACTION_MAP: Record<string, string> = {
   'refresh': 'browser_refresh',
   'reload': 'browser_refresh',
 
+  // Window control (SeleniumBase)
+  'minimize': 'browser_minimize',
+  'restore': 'browser_restore',
+
   // Interaction
   'click': 'browser_click',
   'type': 'browser_type',
@@ -90,6 +94,9 @@ const ACTION_MAP: Record<string, string> = {
   // Session management (State Injection pattern)
   'load_session': 'browser_load_session',
   'list_sessions': 'browser_list_sessions',
+
+  // Export tools
+  'export_perplexity': 'browser_export_perplexity',
 };
 
 // Actions grouped by category for help (used in tool description)
@@ -131,6 +138,7 @@ export class MetaTool {
 • Endpoints: capture, list_endpoints, save_endpoint, get_endpoint
 • Devices: devices (list 90+ devices for mobile/tablet emulation)
 • Anti-detection: solve_turnstile (Cloudflare Turnstile auto-click)
+• Export: export_perplexity (batch export Perplexity threads to markdown)
 • Advanced: evaluate, batch, protection
 
 **Auth-Required Sites (Notion, Gmail, etc.):**
