@@ -70,6 +70,7 @@ import { resilientClick, DEFAULT_RESILIENCE, type ResilienceOptions } from './ut
 import { getGlobalProfile, GlobalProfile, AllProfilesInUseError, switchToAuthProfile } from './global-profile.js';
 import { getDomainIntelligence, DomainIntelligence, requiresAuth } from './domain-intelligence.js';
 import { getApiBookmarks } from './api-bookmarks.js';
+import { getBackendForUrl } from './backend-rules.js';
 
 /**
  * Transform jQuery-style selectors to Playwright-compatible selectors.
@@ -2133,12 +2134,8 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             'slack.com', 'discord.com'
           ];
 
-          // Cloudflare-protected domains (recommend SeleniumBase)
-          const cloudflareProtectedDomains = [
-            'chatgpt.com', 'openai.com',
-            'claude.ai', 'anthropic.com',
-            'perplexity.ai'
-          ];
+          // Note: Cloudflare-protected domains are now configured in ~/.hydraspecter/backend-rules.json
+          // The getBackendForUrl() function handles backend selection based on those rules
 
           let mode = args.mode || 'persistent';
           let backend: BackendType = args.backend || 'playwright';
@@ -2157,27 +2154,25 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 mode = 'persistent';
               }
 
-              // Auto-suggest SeleniumBase for Cloudflare-protected sites
+              // Auto backend: use backend rules to determine which backend to use
               if (backend === 'auto') {
-                const isCloudflareProtected = cloudflareProtectedDomains.some(domain =>
-                  hostname === domain || hostname.endsWith('.' + domain)
-                );
-                if (isCloudflareProtected) {
-                  console.error(`[AUTO] Detected Cloudflare-protected site (${hostname}), will try SeleniumBase`);
-                }
+                const rulesBackend = getBackendForUrl(args.url);
+                console.error(`[AUTO] Backend rules selected: ${rulesBackend} for ${hostname}`);
+                backend = rulesBackend;
               }
             } catch {
               // Invalid URL, keep original mode
             }
           }
 
-          // Handle SeleniumBase backend
+          // Handle SeleniumBase backend (either explicit or selected by rules)
           if (backend === 'seleniumbase') {
             result = await this.createSeleniumBasePage(args.url, args.headless);
             break;
           }
 
-          // Handle auto backend - try Playwright first, fallback to SeleniumBase if blocked
+          // Legacy fallback: if 'auto' wasn't resolved by rules (no URL provided), use runtime detection
+          // This code path is rarely hit now that backend rules handle 'auto' resolution
           if (backend === 'auto' && args.url) {
             // First try with Playwright
             const globalMode = mode === 'incognito' ? 'incognito' : 'session';
@@ -2876,6 +2871,38 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           result = await this.refresh(args.instanceId);
           break;
 
+        case 'browser_minimize': {
+          // SeleniumBase only - minimize browser window
+          const seleniumMinimize = this.seleniumBaseInstances.get(args.instanceId);
+          if (seleniumMinimize) {
+            try {
+              await seleniumMinimize.minimize();
+              result = { success: true, data: { minimized: true } };
+            } catch (error) {
+              result = { success: false, error: `Minimize failed: ${error instanceof Error ? error.message : error}` };
+            }
+          } else {
+            result = { success: false, error: 'Minimize is only available for SeleniumBase instances' };
+          }
+          break;
+        }
+
+        case 'browser_restore': {
+          // SeleniumBase only - restore/maximize browser window
+          const seleniumRestore = this.seleniumBaseInstances.get(args.instanceId);
+          if (seleniumRestore) {
+            try {
+              await seleniumRestore.restore();
+              result = { success: true, data: { restored: true } };
+            } catch (error) {
+              result = { success: false, error: `Restore failed: ${error instanceof Error ? error.message : error}` };
+            }
+          } else {
+            result = { success: false, error: 'Restore is only available for SeleniumBase instances' };
+          }
+          break;
+        }
+
         case 'browser_click':
           result = await this.click(args.instanceId, args.selector, {
             button: args.button || 'left',
@@ -3282,6 +3309,176 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             result = {
               success: false,
               error: `List sessions failed: ${error instanceof Error ? error.message : error}`
+            };
+          }
+          break;
+        }
+
+        case 'browser_export_perplexity': {
+          // Export all Perplexity conversations via DOM scraping
+          // Features: tracker for resume, skip already exported, incremental save
+          const seleniumInstance = this.seleniumBaseInstances.get(args.instanceId);
+          if (!seleniumInstance) {
+            result = {
+              success: false,
+              error: `SeleniumBase instance ${args.instanceId} not found. This action requires backend: "seleniumbase"`
+            };
+            break;
+          }
+
+          try {
+            const {
+              getThreadListScript,
+              getThreadContentScript,
+              ensureExportDir,
+              saveThread,
+              createIndex,
+              loadTracker,
+              saveTracker,
+              isAlreadyExported,
+              markExported,
+              markFailed,
+              DEFAULT_PERPLEXITY_EXPORT_DIR
+            } = await import('./exporters/perplexity-exporter.js');
+
+            // Load or create tracker
+            const tracker = loadTracker();
+            const exportDir = ensureExportDir(args.exportDir || DEFAULT_PERPLEXITY_EXPORT_DIR);
+            tracker.exportDir = exportDir;
+            const errors: string[] = [];
+            const exportedThreads: any[] = [];
+            let skippedCount = 0;
+
+            // Force mode: re-export everything
+            if (args.force) {
+              console.error('[Perplexity Export] Force mode: clearing exported URLs');
+              tracker.exportedUrls = [];
+              tracker.failedUrls = [];
+              saveTracker(tracker);
+            }
+
+            // Step 1: Navigate to library
+            console.error('[Perplexity Export] Navigating to library...');
+            await seleniumInstance.page.goto('https://www.perplexity.ai/library');
+            await new Promise(r => setTimeout(r, 3000));
+
+            // Step 2: Scroll to load all threads (if requested)
+            if (args.loadAll !== false) {
+              console.error('[Perplexity Export] Loading all threads (scrolling)...');
+              let previousCount = 0;
+              let currentCount = 0;
+              let scrollAttempts = 0;
+              let sameCountStreak = 0;
+              const maxScrolls = args.maxScrolls || 100;
+
+              do {
+                previousCount = currentCount;
+                await seleniumInstance.page.scroll({ direction: 'down', amount: 800 });
+                await new Promise(r => setTimeout(r, 1000));
+
+                const countResult = await seleniumInstance.page.evaluate(
+                  `document.querySelectorAll('a[href*="/search/"]').length`
+                );
+                currentCount = typeof countResult === 'number' ? countResult : parseInt(String(countResult)) || 0;
+                scrollAttempts++;
+
+                if (currentCount === previousCount) {
+                  sameCountStreak++;
+                } else {
+                  sameCountStreak = 0;
+                }
+
+                if (scrollAttempts % 10 === 0) {
+                  console.error(`[Perplexity Export] Loaded ${currentCount} threads (scroll ${scrollAttempts}/${maxScrolls})`);
+                }
+              } while (sameCountStreak < 3 && scrollAttempts < maxScrolls);
+
+              console.error(`[Perplexity Export] Finished loading: ${currentCount} threads total`);
+            }
+
+            // Step 3: Extract thread list
+            console.error('[Perplexity Export] Extracting thread list...');
+            const listResult = await seleniumInstance.page.evaluate(getThreadListScript());
+            const threadList = JSON.parse(listResult as string);
+            tracker.totalFound = threadList.total;
+            saveTracker(tracker);
+            console.error(`[Perplexity Export] Found ${threadList.total} threads (${tracker.exportedUrls.length} already exported)`);
+
+            // Step 4: Export each thread (with limit, skipping already exported)
+            const limit = args.limit || threadList.threads.length;
+            const threadsToExport = threadList.threads.slice(0, limit);
+
+            for (let i = 0; i < threadsToExport.length; i++) {
+              const thread = threadsToExport[i];
+
+              // Skip if already exported
+              if (isAlreadyExported(tracker, thread.url)) {
+                skippedCount++;
+                continue;
+              }
+
+              console.error(`[Perplexity Export] Exporting ${i + 1}/${threadsToExport.length}: ${thread.title.slice(0, 50)}...`);
+
+              try {
+                // Navigate to thread
+                await seleniumInstance.page.goto(thread.url);
+                await new Promise(r => setTimeout(r, 3000));
+
+                // Extract content
+                const contentResult = await seleniumInstance.page.evaluate(getThreadContentScript());
+                const content = JSON.parse(contentResult as string);
+
+                const fullThread = {
+                  ...thread,
+                  questions: content.questions || [],
+                  answers: content.answers || [],
+                  sources: content.sources || []
+                };
+
+                // Save to file
+                const filepath = saveThread(fullThread, exportDir);
+                exportedThreads.push({ ...thread, filepath });
+
+                // Mark as exported immediately (crash protection)
+                markExported(tracker, thread.url);
+
+              } catch (threadError) {
+                const errorMsg = `Failed to export "${thread.title}": ${threadError instanceof Error ? threadError.message : threadError}`;
+                errors.push(errorMsg);
+                console.error(`[Perplexity Export] ${errorMsg}`);
+                markFailed(tracker, thread.url);
+              }
+
+              // Small delay between threads
+              await new Promise(r => setTimeout(r, 2000));
+            }
+
+            // Step 5: Create index file with ALL exported threads (not just this session)
+            const allExportedUrls = new Set(tracker.exportedUrls);
+            const allThreadsForIndex = threadList.threads.filter((t: any) =>
+              allExportedUrls.has(t.url.split('?')[0]) || exportedThreads.some(e => e.id === t.id)
+            );
+            const indexPath = createIndex(allThreadsForIndex, exportDir);
+            console.error(`[Perplexity Export] Index updated: ${indexPath}`);
+
+            result = {
+              success: true,
+              data: {
+                threadsFound: threadList.total,
+                threadsExported: exportedThreads.length,
+                threadsSkipped: skippedCount,
+                totalExported: tracker.exportedUrls.length,
+                exportDir,
+                indexFile: indexPath,
+                errors: errors.length > 0 ? errors : undefined,
+                note: `Exported ${exportedThreads.length} new threads (${skippedCount} skipped, ${tracker.exportedUrls.length} total)`
+              }
+            };
+
+          } catch (error) {
+            result = {
+              success: false,
+              error: `Perplexity export failed: ${error instanceof Error ? error.message : error}`
             };
           }
           break;

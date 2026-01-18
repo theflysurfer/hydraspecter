@@ -13,6 +13,7 @@ import { BrowserTools } from './tools.js';
 import { MetaTool } from './meta-tool.js';
 import { ServerConfig } from './types.js';
 import { syncAllProfilesFromChrome } from './global-profile.js';
+import { getBackendRules } from './backend-rules.js';
 
 export class ConcurrentBrowserServer {
   private server: Server;
@@ -125,6 +126,9 @@ export class ConcurrentBrowserServer {
   }
 
   async run() {
+    // Load backend rules configuration at startup (logs config status)
+    getBackendRules();
+
     // Connect MCP transport FIRST (non-blocking startup)
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
