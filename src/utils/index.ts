@@ -17,3 +17,6 @@ export * from './turnstile-handler.js';
 
 // Process management
 export * from './process-cleanup.js';
+
+// Safe wrappers
+export * from './safe-evaluate.js';
