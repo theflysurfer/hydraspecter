@@ -527,8 +527,8 @@ Returns id to use with other browser_* tools.`,
             backend: {
               type: 'string',
               enum: ['playwright', 'seleniumbase', 'auto'],
-              description: 'Browser backend: playwright (default, full features), seleniumbase (Cloudflare bypass), auto (try playwright, fallback to seleniumbase if blocked)',
-              default: 'playwright'
+              description: 'Browser backend: auto (default, selects based on domain rules), playwright (full features), seleniumbase (Cloudflare bypass)',
+              default: 'auto'
             },
             // Options for isolated mode only
             browserType: {
@@ -2138,7 +2138,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           // The getBackendForUrl() function handles backend selection based on those rules
 
           let mode = args.mode || 'persistent';
-          let backend: BackendType = args.backend || 'playwright';
+          let backend: BackendType = args.backend || 'auto';
 
           // Override to persistent if URL matches session-required domain
           if (args.url && mode !== 'isolated') {

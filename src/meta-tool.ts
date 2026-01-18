@@ -178,10 +178,10 @@ Sessions persist across all pools. Just use direct workspace URLs:
 • Capture endpoint: { action: "capture", pageId: "abc", options: { urlPattern: "api/cart" } }
 
 **Backend Selection (Cloudflare bypass):**
-• playwright (default): Full features, network interception, ARIA tree
+• auto (default): Selects backend based on domain rules (~/.hydraspecter/backend-rules.json)
+• playwright: Full features, network interception, ARIA tree
 • seleniumbase: Cloudflare/Turnstile bypass, limited features
-• auto: Try playwright, fallback to seleniumbase if blocked
-• Example: { action: "create", target: "https://chatgpt.com", options: { backend: "seleniumbase" } }
+• Example: { action: "create", target: "https://chatgpt.com" } // auto-selects seleniumbase for chatgpt.com
 • Note: SeleniumBase requires Python + pip install seleniumbase`,
       inputSchema: {
         type: 'object',

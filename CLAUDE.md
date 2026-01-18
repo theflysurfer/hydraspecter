@@ -30,27 +30,27 @@ browser_create({ mode: "isolated", browserType: "firefox" })
 
 ## Backend Selection
 
-HydraSpecter supports two browser backends:
+HydraSpecter supports two browser backends with automatic selection:
 
 | Backend | Use Case | Features |
 |---------|----------|----------|
-| `playwright` (default) | Most sites | Full features, network interception, ARIA tree, 10 pools |
+| `auto` (default) | All sites | Selects backend based on domain rules in `~/.hydraspecter/backend-rules.json` |
+| `playwright` | Most sites | Full features, network interception, ARIA tree, 10 pools |
 | `seleniumbase` | Cloudflare-protected sites | Cloudflare bypass, session persistence via State Injection |
-| `auto` | Unknown sites | Tries Playwright first, falls back to SeleniumBase if blocked |
 
-### When to use SeleniumBase
+### Automatic Backend Selection
 
-Use `backend: "seleniumbase"` for:
-- **chatgpt.com** - Heavy Cloudflare Turnstile protection
-- **openai.com** - Cloudflare protection
-- **claude.ai**, **perplexity.ai** - Cloudflare protection
-- Sites that block Playwright even with stealth plugins
+With `backend: "auto"` (now the default), HydraSpecter automatically selects:
+- **SeleniumBase** for: chatgpt.com, claude.ai, perplexity.ai, openai.com
+- **Playwright** for: all other sites
+
+Rules are configured in `~/.hydraspecter/backend-rules.json`.
 
 ### Examples
 
 ```javascript
-// Cloudflare-protected site
-browser({ action: "create", target: "https://chatgpt.com", options: { backend: "seleniumbase" } })
+// Auto-selects SeleniumBase for chatgpt.com (no need to specify backend)
+browser({ action: "create", target: "https://chatgpt.com" })
 
 // Auto-detect and fallback
 browser({ action: "create", target: "https://unknown-site.com", options: { backend: "auto" } })
