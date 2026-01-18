@@ -3,6 +3,11 @@
  *
  * Uses HTTP bridge for persistent connection across MCP restarts.
  * The Python bridge runs as a standalone HTTP server on port 47482.
+ *
+ * Features:
+ * - Automatic driver reinitialization on session errors (US-012)
+ * - Checkpoint-based operation resume after reinit
+ * - Max 3 reinit attempts before giving up
  */
 
 import { spawn } from 'child_process';
@@ -32,6 +37,193 @@ const HTTP_BRIDGE_SCRIPT = path.join(os.homedir(), '.hydraspecter', 'seleniumbas
 const SESSION_STATE_DIR = path.join(os.homedir(), '.hydraspecter', 'sessions');
 const SELENIUMBASE_PROFILE_DIR = path.join(os.homedir(), '.hydraspecter', 'seleniumbase-profile');
 
+/** Maximum driver reinit attempts per operation */
+const MAX_REINIT_ATTEMPTS = 3;
+
+/**
+ * Error patterns that indicate a session error requiring driver reinit.
+ * These are common Selenium/WebDriver errors that mean the session is dead.
+ */
+const SESSION_ERROR_PATTERNS = [
+  // Session/target closed errors
+  /session.*(deleted|closed|expired|invalid|not found)/i,
+  /target.*closed/i,
+  /page.*closed/i,
+  /browser.*closed/i,
+  /no such (window|session|element)/i,
+  /invalid session id/i,
+  /session not created/i,
+
+  // Stale element errors
+  /stale element reference/i,
+  /element.*stale/i,
+  /element is not attached/i,
+
+  // Connection errors to driver
+  /connection refused/i,
+  /unable to connect/i,
+  /failed to connect/i,
+  /econnrefused/i,
+  /socket hang up/i,
+
+  // Chrome/browser crashed
+  /chrome not reachable/i,
+  /browser.*crash/i,
+  /renderer.*crash/i,
+  /devtools.*disconnected/i,
+
+  // Driver errors
+  /webdriver.*exception/i,
+  /driver.*error/i,
+  /cannot find.*driver/i,
+];
+
+/**
+ * Check if an error message indicates a session error that requires reinit
+ */
+export function isSessionError(errorMessage: string): boolean {
+  return SESSION_ERROR_PATTERNS.some(pattern => pattern.test(errorMessage));
+}
+
+/**
+ * Reinit state tracker - tracks reinit attempts per operation context
+ */
+interface ReinitState {
+  attempts: number;
+  lastReinitAt: Date | null;
+  lastError: string | null;
+}
+
+// Global reinit state (reset on successful operation)
+let globalReinitState: ReinitState = {
+  attempts: 0,
+  lastReinitAt: null,
+  lastError: null,
+};
+
+/**
+ * Reset reinit state after successful operation
+ */
+function resetReinitState(): void {
+  globalReinitState = {
+    attempts: 0,
+    lastReinitAt: null,
+    lastError: null,
+  };
+}
+
+/**
+ * Increment reinit attempts and check if max reached
+ */
+function incrementReinitAttempts(error: string): boolean {
+  globalReinitState.attempts++;
+  globalReinitState.lastReinitAt = new Date();
+  globalReinitState.lastError = error;
+
+  if (globalReinitState.attempts > MAX_REINIT_ATTEMPTS) {
+    console.error(`[SeleniumBase HTTP] Max reinit attempts (${MAX_REINIT_ATTEMPTS}) reached. Giving up.`);
+    return false;
+  }
+
+  console.error(`[SeleniumBase HTTP] Reinit attempt ${globalReinitState.attempts}/${MAX_REINIT_ATTEMPTS}`);
+  return true;
+}
+
+/**
+ * Operation checkpoint for resuming after reinit.
+ * Stores the current URL and operation context so we can navigate back after reinit.
+ */
+export interface OperationCheckpoint {
+  /** URL to navigate to after reinit */
+  url: string;
+  /** Operation name for logging */
+  operation: string;
+  /** Additional context data */
+  context?: Record<string, any>;
+  /** Timestamp when checkpoint was created */
+  createdAt: Date;
+}
+
+/** Current operation checkpoint */
+let currentCheckpoint: OperationCheckpoint | null = null;
+
+/**
+ * Set a checkpoint before a potentially failing operation.
+ * If a session error occurs and reinit happens, the page will navigate to the checkpoint URL.
+ */
+export function setCheckpoint(checkpoint: OperationCheckpoint): void {
+  currentCheckpoint = checkpoint;
+  console.error(`[SeleniumBase HTTP] Checkpoint set: ${checkpoint.operation} @ ${checkpoint.url}`);
+}
+
+/**
+ * Clear the current checkpoint (call after successful operation completion).
+ */
+export function clearCheckpoint(): void {
+  if (currentCheckpoint) {
+    console.error(`[SeleniumBase HTTP] Checkpoint cleared: ${currentCheckpoint.operation}`);
+    currentCheckpoint = null;
+  }
+}
+
+/**
+ * Get the current checkpoint (for resuming after reinit).
+ */
+export function getCheckpoint(): OperationCheckpoint | null {
+  return currentCheckpoint;
+}
+
+/**
+ * Get the current reinit state (for diagnostics/debugging).
+ */
+export function getReinitState(): ReinitState {
+  return { ...globalReinitState };
+}
+
+/**
+ * Execute an operation with automatic checkpoint and retry on session error.
+ * This is the recommended way to run operations that might fail due to session errors.
+ *
+ * @param operation - Name of the operation (for logging)
+ * @param url - URL to navigate to after reinit (checkpoint)
+ * @param fn - The async function to execute
+ * @param context - Optional context data for the checkpoint
+ */
+export async function executeWithCheckpoint<T>(
+  operation: string,
+  url: string,
+  fn: () => Promise<T>,
+  context?: Record<string, any>
+): Promise<T> {
+  // Set checkpoint before operation
+  setCheckpoint({ operation, url, context, createdAt: new Date() });
+
+  try {
+    const result = await fn();
+    // Success - clear checkpoint
+    clearCheckpoint();
+    return result;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    // If this was a session error and we have a checkpoint, we need to navigate back
+    if (isSessionError(errorMessage) && currentCheckpoint) {
+      console.error(`[SeleniumBase HTTP] Session error with checkpoint, will navigate to: ${currentCheckpoint.url}`);
+      // The sendHttpCommand retry logic will handle reinit, then we navigate
+      try {
+        await sendHttpCommand('navigate', { url: currentCheckpoint.url });
+        console.error(`[SeleniumBase HTTP] Navigated back to checkpoint URL: ${currentCheckpoint.url}`);
+      } catch (navError) {
+        console.error(`[SeleniumBase HTTP] Failed to navigate to checkpoint: ${navError}`);
+      }
+    }
+
+    // Clear checkpoint on failure too (operation is complete, even if failed)
+    clearCheckpoint();
+    throw error;
+  }
+}
+
 /** Session state data structure */
 export interface SessionState {
   cookies: any[];
@@ -49,10 +241,68 @@ interface BridgeState {
   url: string | null;
 }
 
+/** Current instance ID for reinit tracking */
+let currentInstanceId: string | null = null;
+
+/** Current headless setting for reinit */
+let currentHeadlessSetting: boolean = false;
+
 /**
- * Send a command to the HTTP bridge
+ * Reinitialize the driver after a session error.
+ * Sends quit command, waits, then reinits with the same profile.
  */
-async function sendHttpCommand(action: string, params: Record<string, any> = {}): Promise<any> {
+async function reinitializeDriver(): Promise<void> {
+  console.error('[SeleniumBase HTTP] Reinitializing driver...');
+
+  // Step 1: Quit the old driver
+  try {
+    await fetch(BRIDGE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'quit', params: {} }),
+    });
+    console.error('[SeleniumBase HTTP] Old driver quit successfully');
+  } catch (e) {
+    // Driver might already be dead, that's fine
+    console.error('[SeleniumBase HTTP] Driver quit failed (expected if already dead)');
+  }
+
+  // Step 2: Wait for cleanup
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  // Step 3: Reinitialize with the same profile
+  const instanceId = currentInstanceId || `sb-${uuidv4().substring(0, 8)}`;
+  const initResponse = await fetch(BRIDGE_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'init',
+      params: {
+        headless: currentHeadlessSetting,
+        instanceId,
+        profileDir: SELENIUMBASE_PROFILE_DIR,
+      },
+    }),
+  });
+
+  if (!initResponse.ok) {
+    const text = await initResponse.text();
+    throw new Error(`Failed to reinitialize driver: ${initResponse.status} ${text}`);
+  }
+
+  const result = await initResponse.json();
+  if (result?.error) {
+    throw new Error(`Failed to reinitialize driver: ${result.error}`);
+  }
+
+  currentInstanceId = instanceId;
+  console.error(`[SeleniumBase HTTP] Driver reinitialized: ${instanceId}`);
+}
+
+/**
+ * Send a command to the HTTP bridge (internal, no retry)
+ */
+async function sendHttpCommandInternal(action: string, params: Record<string, any> = {}): Promise<any> {
   const response = await fetch(BRIDGE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -70,6 +320,41 @@ async function sendHttpCommand(action: string, params: Record<string, any> = {})
     throw new Error(result.error);
   }
   return result;
+}
+
+/**
+ * Send a command to the HTTP bridge with automatic retry on session errors.
+ * If a session error is detected, reinitializes the driver and retries.
+ */
+async function sendHttpCommand(action: string, params: Record<string, any> = {}): Promise<any> {
+  try {
+    const result = await sendHttpCommandInternal(action, params);
+    // Success - reset reinit state
+    resetReinitState();
+    return result;
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+
+    // Check if this is a session error that can be recovered
+    if (isSessionError(errorMessage)) {
+      console.error(`[SeleniumBase HTTP] Session error detected: ${errorMessage}`);
+
+      // Check if we can attempt reinit
+      if (!incrementReinitAttempts(errorMessage)) {
+        // Max attempts reached, throw the original error
+        throw new Error(`Session error after ${MAX_REINIT_ATTEMPTS} reinit attempts: ${errorMessage}`);
+      }
+
+      // Reinitialize the driver
+      await reinitializeDriver();
+
+      // Retry the command
+      return await sendHttpCommand(action, params);
+    }
+
+    // Not a session error, throw as-is
+    throw error;
+  }
 }
 
 /**
@@ -334,6 +619,9 @@ export async function createSeleniumBaseHttpInstance(options?: {
   // Ensure bridge is running
   await startBridge();
 
+  // Store settings for potential reinit
+  currentHeadlessSetting = options?.headless ?? false;
+
   // Check if there's an existing driver
   const pingResult = await sendHttpCommand('ping');
 
@@ -356,6 +644,12 @@ export async function createSeleniumBaseHttpInstance(options?: {
     createdAt = new Date();
     console.error(`[SeleniumBase HTTP] Created new driver: ${instanceId}`);
   }
+
+  // Track current instance ID for reinit
+  currentInstanceId = instanceId;
+
+  // Reset reinit state for new instance
+  resetReinitState();
 
   const instance = new SeleniumBaseHttpInstance(instanceId, createdAt);
 

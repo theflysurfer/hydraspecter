@@ -13,3 +13,24 @@ export {
   createSeleniumBaseInstance,
   isSeleniumBaseAvailable,
 } from './seleniumbase-driver.js';
+
+export {
+  SeleniumBaseHttpPage,
+  SeleniumBaseHttpInstance,
+  createSeleniumBaseHttpInstance,
+  isSeleniumBaseHttpAvailable,
+  shutdownHttpBridge,
+  getBridgeState,
+  // Session error handling (US-012)
+  isSessionError,
+  executeWithCheckpoint,
+  setCheckpoint,
+  clearCheckpoint,
+  getCheckpoint,
+  getReinitState,
+} from './seleniumbase-http-driver.js';
+
+export type {
+  SessionState,
+  OperationCheckpoint,
+} from './seleniumbase-http-driver.js';
