@@ -4453,6 +4453,310 @@ No pageId required - this is a global status check.
           break;
         }
 
+        case 'browser_full_export': {
+          // Full export orchestration: export_chatgpt → wait_export_email → extract ZIP → convert to Markdown
+          // Supports: { source: 'chatgpt' } (claude support planned)
+          const seleniumInstance = this.seleniumBaseInstances.get(args.instanceId);
+          if (!seleniumInstance) {
+            result = {
+              success: false,
+              error: `SeleniumBase instance ${args.instanceId} not found. This action requires backend: "seleniumbase"`
+            };
+            break;
+          }
+
+          const source = (args.source as 'chatgpt' | 'claude') || 'chatgpt';
+          if (!['chatgpt', 'claude'].includes(source)) {
+            result = {
+              success: false,
+              error: `Invalid source: "${source}". Must be 'chatgpt' or 'claude'.`
+            };
+            break;
+          }
+
+          // Create export status file for tracking
+          createExportStatus(source, `Starting full ${source} export`);
+
+          try {
+            const startTime = Date.now();
+            let downloadPath: string | undefined;
+            let conversationsExported = 0;
+
+            // ===== STEP 1: Request export from ChatGPT/Claude =====
+            console.error(`[Full Export] Step 1/4: Requesting ${source} export...`);
+            updateExportStatus({ status: 'exporting', currentStep: `Step 1/4: Requesting ${source} export`, progress: { current: 1, total: 4 } });
+
+            // Execute the export_chatgpt or export_claude action
+            const exportToolName = source === 'chatgpt' ? 'browser_export_chatgpt' : 'browser_export_claude';
+            const exportResult = await this.executeTools(exportToolName, { instanceId: args.instanceId });
+
+            // Check if export request succeeded
+            const exportContent = exportResult.content?.[0];
+            if (exportResult.isError || (exportContent?.type === 'text' && exportContent.text?.includes('"success":false'))) {
+              const errorText = exportContent?.type === 'text' ? exportContent.text : 'Unknown error';
+              failExportStatus(`Export request failed: ${errorText}`);
+              result = {
+                success: false,
+                error: `Step 1 failed: Could not request ${source} export. ${errorText}`
+              };
+              break;
+            }
+
+            console.error(`[Full Export] Export request submitted successfully`);
+
+            // ===== STEP 2: Wait for email and download =====
+            console.error(`[Full Export] Step 2/4: Waiting for export email...`);
+            updateExportStatus({ status: 'waiting_email', currentStep: `Step 2/4: Waiting for export email (may take 2-30 min)`, progress: { current: 2, total: 4 } });
+
+            // Configure email wait options
+            const emailTimeout = args.timeout || 30 * 60 * 1000; // 30 minutes default
+            const pollInterval = args.pollInterval || 30 * 1000; // 30 seconds default
+            const downloadDir = args.downloadDir || path.join(require('os').homedir(), 'Downloads');
+
+            // Execute wait_export_email action
+            const emailResult = await this.executeTools('browser_wait_export_email', {
+              instanceId: args.instanceId,
+              source,
+              timeout: emailTimeout,
+              pollInterval,
+              downloadDir
+            });
+
+            // Check if email download succeeded
+            const emailContent = emailResult.content?.[0];
+            if (emailResult.isError) {
+              const errorText = emailContent?.type === 'text' ? emailContent.text : 'Unknown error';
+              failExportStatus(`Email wait failed: ${errorText}`);
+              result = {
+                success: false,
+                error: `Step 2 failed: Could not download export from email. ${errorText}`
+              };
+              break;
+            }
+
+            // Parse the download result
+            let emailData: { status?: string; downloadPath?: string } = {};
+            if (emailContent?.type === 'text') {
+              try {
+                emailData = JSON.parse(emailContent.text);
+              } catch {
+                // Try to extract downloadPath from the text
+                const pathMatch = emailContent.text.match(/"downloadPath":\s*"([^"]+)"/);
+                if (pathMatch) {
+                  emailData = { status: 'downloaded', downloadPath: pathMatch[1] };
+                }
+              }
+            }
+
+            if (emailData.status === 'downloaded' && emailData.downloadPath) {
+              downloadPath = emailData.downloadPath;
+              console.error(`[Full Export] ZIP downloaded: ${downloadPath}`);
+            } else if (emailData.status === 'link_found') {
+              // Link was found but download not detected - still continue to check for file
+              console.error(`[Full Export] Download link clicked, checking for file...`);
+              // Try to find the downloaded file
+              const { getExpectedFilenamePattern, waitForDownloadFile, ensureDownloadDir } = await import('./exporters/gmail-export-monitor.js');
+              const filenamePattern = getExpectedFilenamePattern(source);
+              const actualDownloadDir = ensureDownloadDir(downloadDir);
+              downloadPath = await waitForDownloadFile(actualDownloadDir, filenamePattern, 60000) || undefined;
+              if (!downloadPath) {
+                failExportStatus('Download not detected after clicking link');
+                result = {
+                  success: false,
+                  error: `Step 2 failed: Download link was clicked but file was not detected. Check browser downloads folder manually.`
+                };
+                break;
+              }
+            } else {
+              failExportStatus('Email wait returned unexpected result');
+              result = {
+                success: false,
+                error: `Step 2 failed: Unexpected result from email wait. Response: ${JSON.stringify(emailData)}`
+              };
+              break;
+            }
+
+            // ===== STEP 3: Extract ZIP =====
+            console.error(`[Full Export] Step 3/4: Extracting ZIP file...`);
+            updateExportStatus({ status: 'extracting', currentStep: `Step 3/4: Extracting ${path.basename(downloadPath || 'export.zip')}`, progress: { current: 3, total: 4 } });
+
+            // Define extraction paths
+            const projectRoot = path.resolve(__dirname, '..');
+            const exportsDir = path.join(projectRoot, 'exports', source);
+            const markdownDir = path.join(projectRoot, 'exports', 'markdown', source);
+
+            // Create directories if they don't exist
+            await fs.mkdir(exportsDir, { recursive: true });
+            await fs.mkdir(markdownDir, { recursive: true });
+
+            // Extract the ZIP file using Node.js built-in (unzip with child_process or adm-zip)
+            try {
+              const { exec } = await import('child_process');
+              const { promisify } = await import('util');
+              const execAsync = promisify(exec);
+
+              // Use PowerShell's Expand-Archive on Windows, unzip on Unix
+              const isWindows = process.platform === 'win32';
+              const extractCmd = isWindows
+                ? `powershell -Command "Expand-Archive -Path '${downloadPath}' -DestinationPath '${exportsDir}' -Force"`
+                : `unzip -o "${downloadPath}" -d "${exportsDir}"`;
+
+              await execAsync(extractCmd);
+              console.error(`[Full Export] ZIP extracted to ${exportsDir}`);
+            } catch (extractError) {
+              const errorMsg = extractError instanceof Error ? extractError.message : String(extractError);
+              failExportStatus(`ZIP extraction failed: ${errorMsg}`);
+              result = {
+                success: false,
+                error: `Step 3 failed: Could not extract ZIP file. ${errorMsg}`
+              };
+              break;
+            }
+
+            // ===== STEP 4: Convert to Markdown =====
+            console.error(`[Full Export] Step 4/4: Converting to Markdown...`);
+            updateExportStatus({ status: 'converting', currentStep: `Step 4/4: Converting conversations to Markdown`, progress: { current: 4, total: 4 } });
+
+            try {
+              // Find conversations.json in the extracted files
+              const conversationsPath = path.join(exportsDir, 'conversations.json');
+
+              // Check if conversations.json exists
+              const conversationsExists = await fs.access(conversationsPath).then(() => true).catch(() => false);
+
+              if (!conversationsExists) {
+                // Try to find it in subdirectories
+                const files = await fs.readdir(exportsDir, { withFileTypes: true });
+                let found = false;
+                for (const file of files) {
+                  if (file.isDirectory()) {
+                    const subPath = path.join(exportsDir, file.name, 'conversations.json');
+                    const subExists = await fs.access(subPath).then(() => true).catch(() => false);
+                    if (subExists) {
+                      // Move files up
+                      const subFiles = await fs.readdir(path.join(exportsDir, file.name));
+                      for (const subFile of subFiles) {
+                        await fs.rename(
+                          path.join(exportsDir, file.name, subFile),
+                          path.join(exportsDir, subFile)
+                        );
+                      }
+                      await fs.rmdir(path.join(exportsDir, file.name));
+                      found = true;
+                      break;
+                    }
+                  }
+                }
+                if (!found) {
+                  console.error(`[Full Export] Warning: conversations.json not found, listing extracted files...`);
+                  const allFiles = await fs.readdir(exportsDir);
+                  console.error(`[Full Export] Extracted files: ${allFiles.join(', ')}`);
+                }
+              }
+
+              // Read and convert conversations to Markdown
+              const finalConversationsPath = path.join(exportsDir, 'conversations.json');
+              const conversationsData = await fs.access(finalConversationsPath)
+                .then(() => fs.readFile(finalConversationsPath, 'utf-8'))
+                .catch(() => null);
+
+              if (conversationsData) {
+                const conversations = JSON.parse(conversationsData);
+                conversationsExported = Array.isArray(conversations) ? conversations.length : 0;
+
+                // Convert each conversation to Markdown
+                for (const conv of (Array.isArray(conversations) ? conversations : [])) {
+                  const title = conv.title || 'Untitled';
+                  const sanitizedTitle = title.replace(/[<>:"/\\|?*]/g, '-').slice(0, 100);
+                  const convId = conv.id || conv.conversation_id || Date.now().toString();
+                  const filename = `${sanitizedTitle}-${convId.slice(0, 8)}.md`;
+                  const filepath = path.join(markdownDir, filename);
+
+                  // Build Markdown content
+                  let markdown = `# ${title}\n\n`;
+                  markdown += `**Created:** ${conv.create_time ? new Date(conv.create_time * 1000).toISOString() : 'Unknown'}\n`;
+                  markdown += `**Updated:** ${conv.update_time ? new Date(conv.update_time * 1000).toISOString() : 'Unknown'}\n\n`;
+                  markdown += `---\n\n`;
+
+                  // Extract messages from the conversation
+                  if (conv.mapping) {
+                    const messages = Object.values(conv.mapping) as Array<{
+                      message?: {
+                        author?: { role?: string };
+                        content?: { parts?: string[] };
+                        create_time?: number;
+                      };
+                    }>;
+                    const sortedMessages = messages
+                      .filter((m): m is { message: NonNullable<typeof m.message> } =>
+                        m.message?.content?.parts !== undefined)
+                      .sort((a, b) =>
+                        (a.message.create_time || 0) - (b.message.create_time || 0));
+
+                    for (const msg of sortedMessages) {
+                      const role = msg.message.author?.role || 'unknown';
+                      const content = msg.message.content?.parts?.join('\n') || '';
+
+                      if (content.trim()) {
+                        const roleLabel = role === 'user' ? '**User**' : role === 'assistant' ? '**Assistant**' : `**${role}**`;
+                        markdown += `${roleLabel}:\n\n${content}\n\n---\n\n`;
+                      }
+                    }
+                  }
+
+                  await fs.writeFile(filepath, markdown, 'utf-8');
+                }
+
+                console.error(`[Full Export] Converted ${conversationsExported} conversations to Markdown`);
+              } else {
+                console.error(`[Full Export] Warning: No conversations.json found, skipping Markdown conversion`);
+                addExportError('conversations.json not found - Markdown conversion skipped');
+              }
+            } catch (convertError) {
+              const errorMsg = convertError instanceof Error ? convertError.message : String(convertError);
+              // Don't fail completely, just log the error
+              console.error(`[Full Export] Markdown conversion error: ${errorMsg}`);
+              addExportError(`Markdown conversion error: ${errorMsg}`);
+            }
+
+            // ===== COMPLETE =====
+            const elapsedMs = Date.now() - startTime;
+            console.error(`[Full Export] Completed in ${Math.round(elapsedMs / 1000)}s`);
+            updateExportStatus({
+              status: 'completed',
+              currentStep: `Export completed: ${conversationsExported} conversations`,
+              progress: { current: 4, total: 4 }
+            });
+            completeExportStatus();
+
+            result = {
+              success: true,
+              data: {
+                success: true,
+                conversationsExported,
+                outputDir: `exports/markdown/${source}/`,
+                downloadPath,
+                elapsedMs,
+                steps: {
+                  exportRequest: 'completed',
+                  emailDownload: 'completed',
+                  zipExtraction: 'completed',
+                  markdownConversion: conversationsExported > 0 ? 'completed' : 'skipped'
+                }
+              }
+            };
+
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            failExportStatus(errorMsg);
+            result = {
+              success: false,
+              error: `Full export failed: ${errorMsg}`
+            };
+          }
+          break;
+        }
+
         default:
           result = {
             success: false,

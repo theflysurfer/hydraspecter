@@ -106,6 +106,9 @@ const ACTION_MAP: Record<string, string> = {
   // Export status
   'get_export_status': 'browser_get_export_status',
   'export_status': 'browser_get_export_status',
+
+  // Full export orchestration
+  'full_export': 'browser_full_export',
 };
 
 // Actions grouped by category for help (used in tool description)
@@ -150,6 +153,7 @@ export class MetaTool {
 • Export: export_perplexity, export_chatgpt, export_claude (request data export from settings)
 • Gmail: wait_export_email (monitor Gmail for export emails and auto-download)
 • Status: get_export_status (read current export progress, no pageId needed)
+• Full Export: full_export (complete orchestration: request → email → download → extract → convert)
 • Advanced: evaluate, batch, protection
 
 **Auth-Required Sites (Notion, Gmail, etc.):**
