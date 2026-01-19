@@ -73,6 +73,15 @@ import { getGlobalProfile, GlobalProfile, AllProfilesInUseError, switchToAuthPro
 import { getDomainIntelligence, DomainIntelligence, requiresAuth } from './domain-intelligence.js';
 import { getApiBookmarks } from './api-bookmarks.js';
 import { getBackendForUrl } from './backend-rules.js';
+import {
+  createExportStatus,
+  updateExportStatus,
+  updateExportProgress,
+  addExportError,
+  completeExportStatus,
+  failExportStatus,
+  type ExportSource as ExportStatusSource
+} from './exporters/export-status.js';
 
 /**
  * Transform jQuery-style selectors to Playwright-compatible selectors.
@@ -3333,6 +3342,9 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             break;
           }
 
+          // Create export status file
+          createExportStatus('perplexity', 'Initializing Perplexity export');
+
           try {
             const {
               getThreadListScript,
@@ -3383,12 +3395,14 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             // Step 1: Navigate to library
             console.error('[Perplexity Export] Navigating to library...');
+            updateExportStatus({ status: 'exporting', currentStep: 'Navigating to library' });
             await seleniumInstance.page.goto('https://www.perplexity.ai/library');
             await new Promise(r => setTimeout(r, 3000));
 
             // Step 2: Scroll to load all threads (if requested)
             if (args.loadAll !== false) {
               console.error('[Perplexity Export] Loading all threads (scrolling)...');
+              updateExportStatus({ currentStep: 'Loading thread list (scrolling)' });
               let previousCount = 0;
               let currentCount = 0;
               let scrollAttempts = 0;
@@ -3422,10 +3436,12 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             // Step 3: Extract thread list
             console.error('[Perplexity Export] Extracting thread list...');
+            updateExportStatus({ currentStep: 'Extracting thread list' });
             const listResult = await seleniumInstance.page.evaluate(getThreadListScript());
             const threadList = JSON.parse(listResult as string);
             tracker.totalFound = threadList.total;
             saveTracker(tracker);
+            updateExportProgress(tracker.exportedUrls.length, threadList.total);
 
             // Calculate pending threads (not exported and not exceeded max retries)
             const pendingThreads = threadList.threads.filter((t: any) => {
@@ -3464,6 +3480,8 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               // Progress logging: Exported X/Y threads
               const exportedSoFar = tracker.exportedUrls.length;
               console.error(`[Perplexity Export] Exported ${exportedSoFar}/${totalToProcess} threads... Processing: ${thread.title.slice(0, 40)}...`);
+              updateExportStatus({ currentStep: `Exporting: ${thread.title.slice(0, 40)}...` });
+              updateExportProgress(exportedSoFar, threadList.total);
 
               let exportSuccess = false;
               let lastError: Error | null = null;
@@ -3524,6 +3542,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 errors.push(errorMsg);
                 console.error(`[Perplexity Export] ${errorMsg}`);
                 markFailed(tracker, thread.url);
+                addExportError(errorMsg);
               }
 
               processedCount++;
@@ -3533,6 +3552,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             }
 
             // Step 5: Create index files with ALL exported threads (not just this session)
+            updateExportStatus({ currentStep: 'Creating index files' });
             // Build full thread objects for all exported threads (using exportedThreads for content)
             const allExportedUrls = new Set(tracker.exportedUrls);
             const allThreadsForIndex = threadList.threads.filter((t: any) =>
@@ -3561,6 +3581,10 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             // Check if all conversations are exported
             const allExported = tracker.exportedUrls.length >= threadList.total;
             const permanentlyFailed = Object.values(tracker.retryCounts).filter(c => c >= MAX_RETRY_ATTEMPTS).length;
+
+            // Mark export as completed
+            updateExportProgress(tracker.exportedUrls.length, threadList.total);
+            completeExportStatus();
 
             result = {
               success: true,
@@ -3591,9 +3615,11 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             };
 
           } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            failExportStatus(errorMsg);
             result = {
               success: false,
-              error: `Perplexity export failed: ${error instanceof Error ? error.message : error}. Hint: Use resumeFromCheckpoint: true to continue from last checkpoint`
+              error: `Perplexity export failed: ${errorMsg}. Hint: Use resumeFromCheckpoint: true to continue from last checkpoint`
             };
           }
           break;
@@ -3611,12 +3637,16 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             break;
           }
 
+          // Create export status file
+          createExportStatus('chatgpt', 'Initializing ChatGPT export');
+
           try {
             const currentUrl = await seleniumInstance.page.url();
 
             // Navigate to settings if not already there
             if (!currentUrl.includes('/settings') && !currentUrl.includes('#settings')) {
               console.error('[ChatGPT Export] Navigating to settings...');
+              updateExportStatus({ status: 'exporting', currentStep: 'Navigating to settings' });
               await seleniumInstance.page.goto('https://chatgpt.com/#settings/DataControls');
               await new Promise(r => setTimeout(r, 4000)); // Wait for modal to open
             } else {
@@ -3650,6 +3680,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             // Click on Data controls if not already there (supports EN/FR)
             console.error('[ChatGPT Export] Looking for Data controls...');
+            updateExportStatus({ currentStep: 'Looking for Data controls' });
             const dataControlsClick = await seleniumInstance.page.evaluate(
               `(function() { const elements = [...document.querySelectorAll('a, button, div[role="button"], span')]; const dataControls = elements.find(el => { const text = el.textContent?.trim() || ''; return text === 'Data controls' || text.includes('Data controls') || text === 'Gestion des données' || text.includes('Gestion des données'); }); if (dataControls) { dataControls.click(); return JSON.stringify({ clicked: true, text: dataControls.textContent?.trim() }); } return JSON.stringify({ clicked: false, availableOptions: elements.slice(0, 20).map(e => e.textContent?.trim()).filter(Boolean) }); })()`
             );
@@ -3665,6 +3696,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             // Look for Export data button (supports EN/FR)
             console.error('[ChatGPT Export] Looking for Export button...');
+            updateExportStatus({ currentStep: 'Looking for Export button' });
             const exportClick = await seleniumInstance.page.evaluate(
               `(function() { const elements = [...document.querySelectorAll('a, button, div[role="button"], span')]; const exportBtn = elements.find(el => { const text = el.textContent?.trim()?.toLowerCase() || ''; return text === 'export' || text === 'export data' || text.includes('export your data') || text === 'exporter' || text === 'exporter les données' || text.includes('exporter'); }); if (exportBtn) { exportBtn.click(); return JSON.stringify({ clicked: true, text: exportBtn.textContent?.trim() }); } return JSON.stringify({ clicked: false, availableButtons: elements.filter(e => e.tagName === 'BUTTON' || e.role === 'button').slice(0, 15).map(e => e.textContent?.trim()).filter(Boolean) }); })()`
             );
@@ -3683,6 +3715,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             // Look for confirm export button in the modal (supports EN/FR)
             console.error('[ChatGPT Export] Looking for Confirm export button...');
+            updateExportStatus({ currentStep: 'Confirming export' });
             const confirmClick = await seleniumInstance.page.evaluate(
               `(function() { const elements = [...document.querySelectorAll('a, button, div[role="button"]')]; const confirmBtn = elements.find(el => { const text = el.textContent?.trim()?.toLowerCase() || ''; return text === 'confirm export' || text.includes('confirm') || text === 'confirmer' || text.includes('confirmer'); }); if (confirmBtn) { confirmBtn.click(); return JSON.stringify({ clicked: true, text: confirmBtn.textContent?.trim() }); } return JSON.stringify({ clicked: false, availableButtons: elements.filter(e => e.tagName === 'BUTTON' || e.role === 'button').slice(0, 15).map(e => e.textContent?.trim()).filter(Boolean) }); })()`
             );
@@ -3705,6 +3738,10 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             );
             const verifyResult = typeof verifyExport === 'string' ? JSON.parse(verifyExport) : verifyExport;
 
+            // Mark export as completed (waiting for email)
+            updateExportStatus({ status: 'waiting_email', currentStep: 'Export requested, waiting for email' });
+            completeExportStatus();
+
             result = {
               success: true,
               data: {
@@ -3716,9 +3753,11 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             };
 
           } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            failExportStatus(errorMsg);
             result = {
               success: false,
-              error: `ChatGPT export failed: ${error instanceof Error ? error.message : error}`
+              error: `ChatGPT export failed: ${errorMsg}`
             };
           }
           break;
@@ -3736,12 +3775,16 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             break;
           }
 
+          // Create export status file
+          createExportStatus('claude', 'Initializing Claude export');
+
           try {
             const currentUrl = await seleniumInstance.page.url();
 
             // Navigate to Claude if not already there
             if (!currentUrl.includes('claude.ai')) {
               console.error('[Claude Export] Navigating to Claude...');
+              updateExportStatus({ status: 'exporting', currentStep: 'Navigating to Claude' });
               await seleniumInstance.page.goto('https://claude.ai');
               await new Promise(r => setTimeout(r, 3000));
             }
@@ -3798,6 +3841,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             // Step 2: Click on user menu (bottom of sidebar - contains user name or "Plan")
             console.error('[Claude Export] Opening user menu...');
+            updateExportStatus({ currentStep: 'Opening user menu' });
             const userMenuClick = await seleniumInstance.page.evaluate(
               `(function() {
                 const buttons = [...document.querySelectorAll('button')];
@@ -3828,6 +3872,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             // Step 3: Click on Settings (Paramètres)
             console.error('[Claude Export] Looking for Settings...');
+            updateExportStatus({ currentStep: 'Looking for Settings' });
             const settingsClick = await seleniumInstance.page.evaluate(
               `(function() {
                 const items = [...document.querySelectorAll('button, div[role="menuitem"], a')];
@@ -3857,6 +3902,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             // Step 4: Click on Privacy tab (Confidentialité)
             console.error('[Claude Export] Looking for Privacy tab...');
+            updateExportStatus({ currentStep: 'Looking for Privacy tab' });
             const privacyClick = await seleniumInstance.page.evaluate(
               `(function() {
                 const items = [...document.querySelectorAll('button, a, div[role="tab"], nav button, nav a')];
@@ -3886,6 +3932,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             // Step 5: Click on Export Data button (Exporter les données)
             console.error('[Claude Export] Looking for Export Data button...');
+            updateExportStatus({ currentStep: 'Looking for Export Data button' });
             const exportClick = await seleniumInstance.page.evaluate(
               `(function() {
                 const buttons = [...document.querySelectorAll('button')];
@@ -3916,6 +3963,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             // Step 6: Confirm export in modal (click "Export" / "Exporter")
             console.error('[Claude Export] Looking for Confirm export button...');
+            updateExportStatus({ currentStep: 'Confirming export' });
             const confirmClick = await seleniumInstance.page.evaluate(
               `(function() {
                 const buttons = [...document.querySelectorAll('button')];
@@ -3962,6 +4010,10 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             );
             const verifyResult = typeof verifyExport === 'string' ? JSON.parse(verifyExport) : verifyExport;
 
+            // Mark export as completed (waiting for email)
+            updateExportStatus({ status: 'waiting_email', currentStep: 'Export requested, waiting for email' });
+            completeExportStatus();
+
             result = {
               success: true,
               data: {
@@ -3973,9 +4025,11 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             };
 
           } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            failExportStatus(errorMsg);
             result = {
               success: false,
-              error: `Claude export failed: ${error instanceof Error ? error.message : error}`
+              error: `Claude export failed: ${errorMsg}`
             };
           }
           break;
@@ -3991,6 +4045,12 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               error: `SeleniumBase instance ${args.instanceId} not found. This action requires backend: "seleniumbase"`
             };
             break;
+          }
+
+          // Create export status file (source will be set after validation)
+          const waitSource = args.source as ExportStatusSource | undefined;
+          if (waitSource && ['chatgpt', 'claude'].includes(waitSource)) {
+            createExportStatus(waitSource, 'Initializing Gmail export monitor');
           }
 
           try {
@@ -4021,6 +4081,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             const startTime = Date.now();
 
             console.error(`[Gmail Export Monitor] Starting - source: ${source}, timeout: ${timeout}ms, pollInterval: ${pollInterval}ms`);
+            updateExportStatus({ status: 'waiting_email', currentStep: 'Starting Gmail export monitor' });
 
             // Navigate to Gmail search for export emails
             const searchUrl = getGmailSearchUrl(source);
@@ -4112,6 +4173,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             while (Date.now() - startTime < timeout) {
               pollCount++;
               console.error(`[Gmail Export Monitor] Checking for export email... (poll #${pollCount}, elapsed: ${Math.round((Date.now() - startTime) / 1000)}s)`);
+              updateExportStatus({ currentStep: `Polling for export email (poll #${pollCount})` });
 
               // Refresh search to get latest emails
               await seleniumInstance.page.goto(searchUrl);
@@ -4148,6 +4210,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 emailFound = true;
                 emailInfo = checkData;
                 console.error(`[Gmail Export Monitor] Export email found! Subject: ${checkData.subject}`);
+                updateExportStatus({ currentStep: `Email found: ${checkData.subject?.slice(0, 50)}` });
                 break;
               }
 
@@ -4240,6 +4303,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             }
 
             console.error(`[Gmail Export Monitor] Found download link: ${linkData.downloadUrl?.substring(0, 100)}...`);
+            updateExportStatus({ status: 'downloading', currentStep: 'Download link found, starting download' });
 
             // Click the download link (with reinit recovery)
             console.error(`[Gmail Export Monitor] Clicking download link...`);
@@ -4274,6 +4338,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             // Wait for download to complete
             console.error(`[Gmail Export Monitor] Waiting for download to complete...`);
+            updateExportStatus({ currentStep: 'Waiting for download to complete' });
             const filenamePattern = getExpectedFilenamePattern(source);
             const downloadPath = await waitForDownloadFile(downloadDir, filenamePattern, 120000);
 
@@ -4295,6 +4360,10 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             console.error(`[Gmail Export Monitor] Download complete: ${downloadPath}`);
 
+            // Mark export as completed
+            updateExportStatus({ status: 'completed', currentStep: `Download complete: ${downloadPath}` });
+            completeExportStatus();
+
             result = {
               success: true,
               data: {
@@ -4308,9 +4377,11 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             };
 
           } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            failExportStatus(errorMsg);
             result = {
               success: false,
-              error: `Gmail export monitor failed: ${error instanceof Error ? error.message : error}`
+              error: `Gmail export monitor failed: ${errorMsg}`
             };
           }
           break;
