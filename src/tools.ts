@@ -27,7 +27,8 @@ import {
 import {
   SeleniumBaseHttpInstance,
   createSeleniumBaseHttpInstance,
-  isSeleniumBaseHttpAvailable
+  isSeleniumBaseHttpAvailable,
+  reinitializeSeleniumDriver
 } from './backends/seleniumbase-http-driver.js';
 import { safeEvaluate } from './utils/safe-evaluate.js';
 
@@ -4035,8 +4036,21 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               await new Promise(r => setTimeout(r, 2000));
             }
 
-            // Check if logged in to Gmail
-            const loginCheckResult = await safeEvaluate<string>(
+            // Helper function to handle needsReinit recovery
+            const handleReinitIfNeeded = async (evalResult: { needsReinit?: boolean }): Promise<boolean> => {
+              if (evalResult.needsReinit) {
+                console.error('[Gmail Export Monitor] Driver needs reinitialization, recovering...');
+                await reinitializeSeleniumDriver(args.instanceId);
+                // Re-navigate to Gmail search after reinit
+                await seleniumInstance.page.goto(searchUrl);
+                await new Promise(r => setTimeout(r, 2000));
+                return true; // Indicates reinit happened
+              }
+              return false;
+            };
+
+            // Check if logged in to Gmail (with reinit recovery)
+            let loginCheckResult = await safeEvaluate<string>(
               seleniumInstance.page,
               `(function() {
                 const text = document.body.innerText || '';
@@ -4051,6 +4065,26 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 return JSON.stringify({ loggedIn: false, reason: 'Could not detect Gmail inbox' });
               })()`
             );
+
+            // Handle reinit and retry login check if needed
+            if (await handleReinitIfNeeded(loginCheckResult)) {
+              loginCheckResult = await safeEvaluate<string>(
+                seleniumInstance.page,
+                `(function() {
+                  const text = document.body.innerText || '';
+                  if (text.includes('Connexion') || text.includes('Sign in') || text.includes('Log in')) {
+                    if (!text.includes('Boîte de réception') && !text.includes('Inbox') && !text.includes('mail')) {
+                      return JSON.stringify({ loggedIn: false, reason: 'Login page detected' });
+                    }
+                  }
+                  if (text.includes('Boîte de réception') || text.includes('Inbox') || text.includes('Recherche') || text.includes('Search')) {
+                    return JSON.stringify({ loggedIn: true });
+                  }
+                  return JSON.stringify({ loggedIn: false, reason: 'Could not detect Gmail inbox' });
+                })()`
+              );
+            }
+
             if (!loginCheckResult.success) {
               result = {
                 success: false,
@@ -4070,18 +4104,29 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             }
 
             // Polling loop to wait for export email
+            // State is preserved across reinit: pollCount is implicit via startTime comparison
             let emailFound = false;
             let emailInfo: { sender?: string; subject?: string; rowIndex?: number } = {};
+            let pollCount = 0;
 
             while (Date.now() - startTime < timeout) {
-              console.error(`[Gmail Export Monitor] Checking for export email... (elapsed: ${Math.round((Date.now() - startTime) / 1000)}s)`);
+              pollCount++;
+              console.error(`[Gmail Export Monitor] Checking for export email... (poll #${pollCount}, elapsed: ${Math.round((Date.now() - startTime) / 1000)}s)`);
 
               // Refresh search to get latest emails
               await seleniumInstance.page.goto(searchUrl);
               await new Promise(r => setTimeout(r, 2000));
 
               // Check for matching email
-              const checkResultSafe = await safeEvaluate<string>(seleniumInstance.page, getCheckEmailScript(source));
+              let checkResultSafe = await safeEvaluate<string>(seleniumInstance.page, getCheckEmailScript(source));
+
+              // Handle reinit if needed - poll state (pollCount, startTime) is preserved
+              if (await handleReinitIfNeeded(checkResultSafe)) {
+                console.error(`[Gmail Export Monitor] Recovered from freeze at poll #${pollCount}, continuing...`);
+                // Retry the check after reinit
+                checkResultSafe = await safeEvaluate<string>(seleniumInstance.page, getCheckEmailScript(source));
+              }
+
               if (!checkResultSafe.success) {
                 console.error(`[Gmail Export Monitor] Check email script failed: ${checkResultSafe.error}. Retrying...`);
                 await new Promise(r => setTimeout(r, pollInterval));
@@ -4118,9 +4163,24 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               break;
             }
 
-            // Click on the email to open it
+            // Click on the email to open it (with reinit recovery)
             console.error(`[Gmail Export Monitor] Opening email...`);
-            const clickResultSafe = await safeEvaluate<string>(seleniumInstance.page, getClickEmailScript(emailInfo.rowIndex || 0));
+            let clickResultSafe = await safeEvaluate<string>(seleniumInstance.page, getClickEmailScript(emailInfo.rowIndex || 0));
+
+            // Handle reinit and retry click if needed
+            if (await handleReinitIfNeeded(clickResultSafe)) {
+              // After reinit, we need to re-find the email since we're on a fresh page
+              // Navigate to search and find the email again
+              const reCheckResult = await safeEvaluate<string>(seleniumInstance.page, getCheckEmailScript(source));
+              if (reCheckResult.success && reCheckResult.result) {
+                const reCheckData = typeof reCheckResult.result === 'string' ? JSON.parse(reCheckResult.result) : reCheckResult.result;
+                if (reCheckData?.found) {
+                  emailInfo = reCheckData;
+                }
+              }
+              clickResultSafe = await safeEvaluate<string>(seleniumInstance.page, getClickEmailScript(emailInfo.rowIndex || 0));
+            }
+
             if (!clickResultSafe.success) {
               result = {
                 success: false,
@@ -4142,9 +4202,25 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             // Wait for email to open
             await new Promise(r => setTimeout(r, 2000));
 
-            // Extract download link from email
+            // Extract download link from email (with reinit recovery)
             console.error(`[Gmail Export Monitor] Extracting download link...`);
-            const linkResultSafe = await safeEvaluate<string>(seleniumInstance.page, getExtractDownloadLinkScript(source));
+            let linkResultSafe = await safeEvaluate<string>(seleniumInstance.page, getExtractDownloadLinkScript(source));
+
+            // Handle reinit and retry extract if needed
+            if (await handleReinitIfNeeded(linkResultSafe)) {
+              // After reinit, we need to re-navigate to the email
+              // First find and click the email again
+              const reCheckResult = await safeEvaluate<string>(seleniumInstance.page, getCheckEmailScript(source));
+              if (reCheckResult.success && reCheckResult.result) {
+                const reCheckData = typeof reCheckResult.result === 'string' ? JSON.parse(reCheckResult.result) : reCheckResult.result;
+                if (reCheckData?.found) {
+                  await safeEvaluate<string>(seleniumInstance.page, getClickEmailScript(reCheckData.rowIndex || 0));
+                  await new Promise(r => setTimeout(r, 2000));
+                }
+              }
+              linkResultSafe = await safeEvaluate<string>(seleniumInstance.page, getExtractDownloadLinkScript(source));
+            }
+
             if (!linkResultSafe.success) {
               result = {
                 success: false,
@@ -4165,9 +4241,9 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
             console.error(`[Gmail Export Monitor] Found download link: ${linkData.downloadUrl?.substring(0, 100)}...`);
 
-            // Click the download link
+            // Click the download link (with reinit recovery)
             console.error(`[Gmail Export Monitor] Clicking download link...`);
-            const downloadClickResult = await safeEvaluate(
+            let downloadClickResult = await safeEvaluate(
               seleniumInstance.page,
               `(function() {
                 const links = [...document.querySelectorAll('a[href]')];
@@ -4181,6 +4257,15 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 return true;
               })()`
             );
+
+            // Handle reinit for download click - fallback to direct navigation
+            if (await handleReinitIfNeeded(downloadClickResult)) {
+              console.error(`[Gmail Export Monitor] Recovered from freeze, using direct navigation...`);
+              // After reinit, just navigate directly to the download URL
+              await seleniumInstance.page.goto(linkData.downloadUrl);
+              downloadClickResult = { success: true, result: true };
+            }
+
             if (!downloadClickResult.success) {
               console.error(`[Gmail Export Monitor] Download click failed: ${downloadClickResult.error}. Attempting direct navigation...`);
               // Try direct navigation as fallback
