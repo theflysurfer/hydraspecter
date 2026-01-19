@@ -4455,7 +4455,7 @@ No pageId required - this is a global status check.
 
         case 'browser_full_export': {
           // Full export orchestration: export_chatgpt/claude → wait_export_email → extract ZIP → convert to Markdown
-          // Supports: { source: 'chatgpt' } or { source: 'claude' }
+          // Supports: { source: 'chatgpt' }, { source: 'claude' }, or { source: 'both' }
           const seleniumInstance = this.seleniumBaseInstances.get(args.instanceId);
           if (!seleniumInstance) {
             result = {
@@ -4465,29 +4465,43 @@ No pageId required - this is a global status check.
             break;
           }
 
-          const source = (args.source as 'chatgpt' | 'claude') || 'chatgpt';
-          if (!['chatgpt', 'claude'].includes(source)) {
+          const source = (args.source as 'chatgpt' | 'claude' | 'both') || 'chatgpt';
+          if (!['chatgpt', 'claude', 'both'].includes(source)) {
             result = {
               success: false,
-              error: `Invalid source: "${source}". Must be 'chatgpt' or 'claude'.`
+              error: `Invalid source: "${source}". Must be 'chatgpt', 'claude', or 'both'.`
             };
             break;
           }
 
-          // Create export status file for tracking
-          createExportStatus(source, `Starting full ${source} export`);
+          // Helper function to run export for a single source
+          const runSingleExport = async (singleSource: 'chatgpt' | 'claude'): Promise<{
+            success: boolean;
+            conversationsExported?: number;
+            outputDir?: string;
+            downloadPath?: string;
+            elapsedMs?: number;
+            steps?: {
+              exportRequest: string;
+              emailDownload: string;
+              zipExtraction: string;
+              markdownConversion: string;
+            };
+            error?: string;
+          }> => {
+            // Create export status file for tracking
+            createExportStatus(singleSource, `Starting full ${singleSource} export`);
 
-          try {
             const startTime = Date.now();
             let downloadPath: string | undefined;
             let conversationsExported = 0;
 
             // ===== STEP 1: Request export from ChatGPT/Claude =====
-            console.error(`[Full Export] Step 1/4: Requesting ${source} export...`);
-            updateExportStatus({ status: 'exporting', currentStep: `Step 1/4: Requesting ${source} export`, progress: { current: 1, total: 4 } });
+            console.error(`[Full Export] Step 1/4: Requesting ${singleSource} export...`);
+            updateExportStatus({ status: 'exporting', currentStep: `Step 1/4: Requesting ${singleSource} export`, progress: { current: 1, total: 4 } });
 
             // Execute the export_chatgpt or export_claude action
-            const exportToolName = source === 'chatgpt' ? 'browser_export_chatgpt' : 'browser_export_claude';
+            const exportToolName = singleSource === 'chatgpt' ? 'browser_export_chatgpt' : 'browser_export_claude';
             const exportResult = await this.executeTools(exportToolName, { instanceId: args.instanceId });
 
             // Check if export request succeeded
@@ -4495,11 +4509,10 @@ No pageId required - this is a global status check.
             if (exportResult.isError || (exportContent?.type === 'text' && exportContent.text?.includes('"success":false'))) {
               const errorText = exportContent?.type === 'text' ? exportContent.text : 'Unknown error';
               failExportStatus(`Export request failed: ${errorText}`);
-              result = {
+              return {
                 success: false,
-                error: `Step 1 failed: Could not request ${source} export. ${errorText}`
+                error: `Step 1 failed: Could not request ${singleSource} export. ${errorText}`
               };
-              break;
             }
 
             console.error(`[Full Export] Export request submitted successfully`);
@@ -4516,7 +4529,7 @@ No pageId required - this is a global status check.
             // Execute wait_export_email action
             const emailResult = await this.executeTools('browser_wait_export_email', {
               instanceId: args.instanceId,
-              source,
+              source: singleSource,
               timeout: emailTimeout,
               pollInterval,
               downloadDir
@@ -4527,11 +4540,10 @@ No pageId required - this is a global status check.
             if (emailResult.isError) {
               const errorText = emailContent?.type === 'text' ? emailContent.text : 'Unknown error';
               failExportStatus(`Email wait failed: ${errorText}`);
-              result = {
+              return {
                 success: false,
                 error: `Step 2 failed: Could not download export from email. ${errorText}`
               };
-              break;
             }
 
             // Parse the download result
@@ -4556,24 +4568,22 @@ No pageId required - this is a global status check.
               console.error(`[Full Export] Download link clicked, checking for file...`);
               // Try to find the downloaded file
               const { getExpectedFilenamePattern, waitForDownloadFile, ensureDownloadDir } = await import('./exporters/gmail-export-monitor.js');
-              const filenamePattern = getExpectedFilenamePattern(source);
+              const filenamePattern = getExpectedFilenamePattern(singleSource);
               const actualDownloadDir = ensureDownloadDir(downloadDir);
               downloadPath = await waitForDownloadFile(actualDownloadDir, filenamePattern, 60000) || undefined;
               if (!downloadPath) {
                 failExportStatus('Download not detected after clicking link');
-                result = {
+                return {
                   success: false,
                   error: `Step 2 failed: Download link was clicked but file was not detected. Check browser downloads folder manually.`
                 };
-                break;
               }
             } else {
               failExportStatus('Email wait returned unexpected result');
-              result = {
+              return {
                 success: false,
                 error: `Step 2 failed: Unexpected result from email wait. Response: ${JSON.stringify(emailData)}`
               };
-              break;
             }
 
             // ===== STEP 3: Extract ZIP =====
@@ -4582,8 +4592,8 @@ No pageId required - this is a global status check.
 
             // Define extraction paths
             const projectRoot = path.resolve(__dirname, '..');
-            const exportsDir = path.join(projectRoot, 'exports', source);
-            const markdownDir = path.join(projectRoot, 'exports', 'markdown', source);
+            const exportsDir = path.join(projectRoot, 'exports', singleSource);
+            const markdownDir = path.join(projectRoot, 'exports', 'markdown', singleSource);
 
             // Create directories if they don't exist
             await fs.mkdir(exportsDir, { recursive: true });
@@ -4606,11 +4616,10 @@ No pageId required - this is a global status check.
             } catch (extractError) {
               const errorMsg = extractError instanceof Error ? extractError.message : String(extractError);
               failExportStatus(`ZIP extraction failed: ${errorMsg}`);
-              result = {
+              return {
                 success: false,
                 error: `Step 3 failed: Could not extract ZIP file. ${errorMsg}`
               };
-              break;
             }
 
             // ===== STEP 4: Convert to Markdown =====
@@ -4757,23 +4766,91 @@ No pageId required - this is a global status check.
             });
             completeExportStatus();
 
-            result = {
+            return {
               success: true,
+              conversationsExported,
+              outputDir: `exports/markdown/${singleSource}/`,
+              downloadPath,
+              elapsedMs,
+              steps: {
+                exportRequest: 'completed',
+                emailDownload: 'completed',
+                zipExtraction: 'completed',
+                markdownConversion: conversationsExported > 0 ? 'completed' : 'skipped'
+              }
+            };
+          };
+
+          // Handle 'both' source: run ChatGPT then Claude sequentially
+          if (source === 'both') {
+            console.error(`[Full Export] Running full export for BOTH ChatGPT and Claude...`);
+
+            const combinedResult: {
+              chatgpt?: Awaited<ReturnType<typeof runSingleExport>>;
+              claude?: Awaited<ReturnType<typeof runSingleExport>>;
+            } = {};
+
+            // Run ChatGPT export first
+            console.error(`[Full Export] === Starting ChatGPT export (1/2) ===`);
+            try {
+              combinedResult.chatgpt = await runSingleExport('chatgpt');
+            } catch (error) {
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              combinedResult.chatgpt = {
+                success: false,
+                error: `ChatGPT export failed: ${errorMsg}`
+              };
+              console.error(`[Full Export] ChatGPT export failed: ${errorMsg}`);
+            }
+
+            // Run Claude export second (even if ChatGPT failed)
+            console.error(`[Full Export] === Starting Claude export (2/2) ===`);
+            try {
+              combinedResult.claude = await runSingleExport('claude');
+            } catch (error) {
+              const errorMsg = error instanceof Error ? error.message : String(error);
+              combinedResult.claude = {
+                success: false,
+                error: `Claude export failed: ${errorMsg}`
+              };
+              console.error(`[Full Export] Claude export failed: ${errorMsg}`);
+            }
+
+            // Determine overall success
+            const chatgptSuccess = combinedResult.chatgpt?.success ?? false;
+            const claudeSuccess = combinedResult.claude?.success ?? false;
+            const overallSuccess = chatgptSuccess || claudeSuccess; // At least one succeeded
+
+            result = {
+              success: overallSuccess,
               data: {
-                success: true,
-                conversationsExported,
-                outputDir: `exports/markdown/${source}/`,
-                downloadPath,
-                elapsedMs,
-                steps: {
-                  exportRequest: 'completed',
-                  emailDownload: 'completed',
-                  zipExtraction: 'completed',
-                  markdownConversion: conversationsExported > 0 ? 'completed' : 'skipped'
+                chatgpt: combinedResult.chatgpt,
+                claude: combinedResult.claude,
+                summary: {
+                  chatgptSuccess,
+                  claudeSuccess,
+                  totalConversations: (combinedResult.chatgpt?.conversationsExported || 0) + (combinedResult.claude?.conversationsExported || 0)
                 }
               }
             };
+            break;
+          }
 
+          // Single source export - use the helper function
+          try {
+            const singleResult = await runSingleExport(source as 'chatgpt' | 'claude');
+            result = {
+              success: singleResult.success,
+              data: singleResult.success ? {
+                success: true,
+                conversationsExported: singleResult.conversationsExported,
+                outputDir: singleResult.outputDir,
+                downloadPath: singleResult.downloadPath,
+                elapsedMs: singleResult.elapsedMs,
+                steps: singleResult.steps
+              } : undefined,
+              error: singleResult.error
+            };
           } catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
             failExportStatus(errorMsg);
