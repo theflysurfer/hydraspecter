@@ -56,6 +56,7 @@ import { resilientClick, DEFAULT_RESILIENCE, type ResilienceOptions } from './ut
 import { getGlobalProfile, GlobalProfile, AllProfilesInUseError, switchToAuthProfile } from './global-profile.js';
 import { getDomainIntelligence, DomainIntelligence, requiresAuth } from './domain-intelligence.js';
 import { getApiBookmarks } from './api-bookmarks.js';
+import { getJobManager } from './job-manager.js';
 
 /**
  * Transform jQuery-style selectors to Playwright-compatible selectors.
@@ -509,6 +510,12 @@ Returns id to use with other browser_* tools.`,
               enum: ['auto', 'playwright', 'camoufox', 'seleniumbase'],
               description: 'Browser backend (isolated mode only). "auto" selects based on URL (camoufox for Cloudflare sites). "playwright" for full features, "camoufox" for Firefox stealth, "seleniumbase" for Chrome UC.',
               default: 'auto'
+            },
+            // Async mode for slow backends (camoufox, seleniumbase)
+            async: {
+              type: 'boolean',
+              description: 'Return immediately with jobId instead of waiting. Use job_status to check completion. Auto-enabled for slow backends (camoufox, seleniumbase) to avoid MCP timeout.',
+              default: false
             }
           }
         },
@@ -529,7 +536,11 @@ Returns id to use with other browser_* tools.`,
               }
             },
             profileDir: { type: 'string', description: 'Path to persistent profile (persistent mode only)' },
-            createdAt: { type: 'string', description: 'ISO timestamp' }
+            createdAt: { type: 'string', description: 'ISO timestamp' },
+            // Async job fields
+            jobId: { type: 'string', description: 'Job ID when async=true. Use job_status to check completion.' },
+            status: { type: 'string', enum: ['pending', 'running', 'completed', 'failed'], description: 'Job status when async=true' },
+            progress: { type: 'string', description: 'Progress message when async=true' }
           },
           required: ['id', 'mode']
         }
@@ -558,6 +569,55 @@ Returns id to use with other browser_* tools.`,
             saved: { type: 'boolean' }
           },
           required: ['filePath', 'saved']
+        }
+      },
+
+      // Async job status
+      {
+        name: 'job_status',
+        description: `Check status of an async browser creation job.
+
+When browser_create returns a jobId (for slow backends like camoufox/seleniumbase),
+use this tool to check if the browser is ready.
+
+**Status values:**
+• pending - Job queued, not started yet
+• running - Browser is being created (may take 30-60s for stealth backends)
+• completed - Browser ready! Use the returned instanceId with browser_* tools
+• failed - Creation failed, check error message
+
+**Tip:** Poll every 5-10s until status is "completed" or "failed".`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            jobId: {
+              type: 'string',
+              description: 'Job ID from browser_create async response'
+            }
+          },
+          required: ['jobId']
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            jobId: { type: 'string' },
+            status: { type: 'string', enum: ['pending', 'running', 'completed', 'failed', 'cancelled'] },
+            progress: { type: 'string', description: 'Human-readable progress message' },
+            progressPercent: { type: 'number', description: 'Progress percentage 0-100' },
+            result: {
+              type: 'object',
+              description: 'Browser details when status=completed',
+              properties: {
+                instanceId: { type: 'string' },
+                backend: { type: 'string' },
+                url: { type: 'string' }
+              }
+            },
+            error: { type: 'string', description: 'Error message when status=failed' },
+            createdAt: { type: 'string' },
+            completedAt: { type: 'string' }
+          },
+          required: ['jobId', 'status']
         }
       },
 
@@ -2090,53 +2150,142 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               }
             }
 
-            result = await this.browserManager.createInstance(
-              {
-                browserType: args.browserType || 'chromium',
-                headless: args.headless ?? false, // Default false for better anti-detection
-                viewport,
-                userAgent,
-                storageStatePath: args.storageStatePath,
-                // Backend selection: pass URL for auto-detection, or explicit backend
-                url: args.url,
-                backend: args.backend || 'auto',
-              },
-              args.metadata
-            );
+            const requestedBackend = args.backend || 'auto';
+            // Slow backends that benefit from async mode to avoid MCP timeout
+            const slowBackends = ['camoufox', 'seleniumbase'];
+            const isSlowBackend = slowBackends.includes(requestedBackend);
+            // Auto-enable async for slow backends unless explicitly disabled
+            const useAsync = args.async === true || (args.async !== false && isSlowBackend);
 
-            // Setup console capture if enabled
-            if (result.success && result.instanceId && args.enableConsoleCapture) {
-              const instance = this.browserManager.getInstance(result.instanceId);
-              if (instance) {
-                this.setupConsoleCapture(result.instanceId, instance.page);
-              }
-            }
+            if (useAsync && isSlowBackend) {
+              // Async mode: use JobManager to avoid MCP timeout
+              console.error(`[ASYNC] Creating ${requestedBackend} browser in background (async mode)`);
 
-            // Setup network monitoring if enabled
-            if (result.success && result.instanceId && args.enableNetworkMonitoring) {
-              const instance = this.browserManager.getInstance(result.instanceId);
-              if (instance) {
-                this.setupNetworkMonitoring(result.instanceId, instance.page);
-              }
-            }
+              const jobManager = getJobManager();
+              const job = jobManager.createJob<any>(
+                'browser_create',
+                async (signal, reportProgress) => {
+                  reportProgress('Starting browser creation...', 10);
 
-            // Setup download handling
-            if (result.success && result.instanceId) {
-              const instance = this.browserManager.getInstance(result.instanceId);
-              if (instance) {
-                this.setupDownloadHandling(result.instanceId, instance.page);
-              }
-            }
+                  const createResult = await this.browserManager.createInstance(
+                    {
+                      browserType: args.browserType || 'chromium',
+                      headless: args.headless ?? false,
+                      viewport,
+                      userAgent,
+                      storageStatePath: args.storageStatePath,
+                      url: args.url,
+                      backend: requestedBackend,
+                    },
+                    args.metadata
+                  );
 
-            // Transform output to match new schema
-            if (result.success && result.data) {
-              result.data = {
-                id: result.data.instanceId,
-                mode: 'isolated',
-                backend: result.data.backend || 'playwright',
-                browserType: result.data.browserType,
-                createdAt: result.data.createdAt
+                  if (signal.aborted) {
+                    throw new Error('Job cancelled');
+                  }
+
+                  reportProgress('Browser created, setting up...', 80);
+
+                  // Setup console capture if enabled
+                  if (createResult.success && createResult.instanceId && args.enableConsoleCapture) {
+                    const instance = this.browserManager.getInstance(createResult.instanceId);
+                    if (instance) {
+                      this.setupConsoleCapture(createResult.instanceId, instance.page);
+                    }
+                  }
+
+                  // Setup network monitoring if enabled
+                  if (createResult.success && createResult.instanceId && args.enableNetworkMonitoring) {
+                    const instance = this.browserManager.getInstance(createResult.instanceId);
+                    if (instance) {
+                      this.setupNetworkMonitoring(createResult.instanceId, instance.page);
+                    }
+                  }
+
+                  // Setup download handling
+                  if (createResult.success && createResult.instanceId) {
+                    const instance = this.browserManager.getInstance(createResult.instanceId);
+                    if (instance) {
+                      this.setupDownloadHandling(createResult.instanceId, instance.page);
+                    }
+                  }
+
+                  reportProgress('Ready', 100);
+
+                  return {
+                    instanceId: createResult.instanceId,
+                    backend: createResult.data?.backend || requestedBackend,
+                    url: args.url,
+                    success: createResult.success,
+                    error: createResult.error
+                  };
+                },
+                { metadata: { url: args.url, backend: requestedBackend } }
+              );
+
+              // Return immediately with job info
+              result = {
+                success: true,
+                data: {
+                  id: `job:${job.id}`, // Prefix to indicate this is a job, not an instance
+                  mode: 'isolated',
+                  backend: requestedBackend,
+                  jobId: job.id,
+                  status: job.status,
+                  progress: 'Starting browser creation...',
+                  message: `Browser creation started in background. Use job_status with jobId "${job.id}" to check when ready.`
+                }
               };
+            } else {
+              // Sync mode: wait for browser creation (Playwright or explicit sync)
+              result = await this.browserManager.createInstance(
+                {
+                  browserType: args.browserType || 'chromium',
+                  headless: args.headless ?? false, // Default false for better anti-detection
+                  viewport,
+                  userAgent,
+                  storageStatePath: args.storageStatePath,
+                  // Backend selection: pass URL for auto-detection, or explicit backend
+                  url: args.url,
+                  backend: requestedBackend,
+                },
+                args.metadata
+              );
+
+              // Setup console capture if enabled
+              if (result.success && result.instanceId && args.enableConsoleCapture) {
+                const instance = this.browserManager.getInstance(result.instanceId);
+                if (instance) {
+                  this.setupConsoleCapture(result.instanceId, instance.page);
+                }
+              }
+
+              // Setup network monitoring if enabled
+              if (result.success && result.instanceId && args.enableNetworkMonitoring) {
+                const instance = this.browserManager.getInstance(result.instanceId);
+                if (instance) {
+                  this.setupNetworkMonitoring(result.instanceId, instance.page);
+                }
+              }
+
+              // Setup download handling
+              if (result.success && result.instanceId) {
+                const instance = this.browserManager.getInstance(result.instanceId);
+                if (instance) {
+                  this.setupDownloadHandling(result.instanceId, instance.page);
+                }
+              }
+
+              // Transform output to match new schema
+              if (result.success && result.data) {
+                result.data = {
+                  id: result.data.instanceId,
+                  mode: 'isolated',
+                  backend: result.data.backend || 'playwright',
+                  browserType: result.data.browserType,
+                  createdAt: result.data.createdAt
+                };
+              }
             }
           } else {
             // Persistent or incognito mode: use GlobalProfile
@@ -2202,6 +2351,39 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           } else {
             // Fall back to browserManager
             result = await this.browserManager.saveSessionState(args.instanceId, args.filePath);
+          }
+          break;
+        }
+
+        case 'job_status': {
+          const jobManager = getJobManager();
+          const job = jobManager.getJob(args.jobId);
+
+          if (!job) {
+            result = {
+              success: false,
+              error: `Job not found: ${args.jobId}. Jobs are cleaned up 1 hour after completion.`
+            };
+          } else {
+            result = {
+              success: true,
+              data: {
+                jobId: job.id,
+                status: job.status,
+                progress: job.progress,
+                progressPercent: job.progressPercent,
+                createdAt: job.createdAt.toISOString(),
+                completedAt: job.completedAt?.toISOString(),
+                ...(job.status === 'completed' && job.result && {
+                  result: {
+                    instanceId: job.result.instanceId,
+                    backend: job.result.backend,
+                    url: job.result.url
+                  }
+                }),
+                ...(job.status === 'failed' && { error: job.error })
+              }
+            };
           }
           break;
         }

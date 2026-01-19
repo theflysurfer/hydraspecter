@@ -94,6 +94,10 @@ const ACTION_MAP: Record<string, string> = {
   // Window management (handled directly in MetaTool)
   'minimize': '_meta_minimize',
   'restore': '_meta_restore',
+
+  // Async job management
+  'job_status': 'job_status',
+  'job': 'job_status',
 };
 
 // Actions grouped by category for help (used in tool description)
@@ -135,6 +139,7 @@ export class MetaTool {
 • Endpoints: capture, list_endpoints, save_endpoint, get_endpoint
 • Devices: devices (list 90+ devices for mobile/tablet emulation)
 • Backends: get_backend, switch_backend, list_backends, backend_rules
+• Jobs: job_status (check async browser creation progress)
 • Advanced: evaluate, batch, protection
 
 **Backend Selection (Cloudflare bypass):**
@@ -180,7 +185,13 @@ Sessions persist across all pools. Just use direct workspace URLs:
 • Enable: { action: "enable_network", pageId: "abc" }
 • Get logs: { action: "network", pageId: "abc", options: { urlPattern: "api/save", limit: 10 } }
 • Wait for request: { action: "wait_request", pageId: "abc", options: { urlPattern: "saveTransaction", timeout: 5000 } }
-• Capture endpoint: { action: "capture", pageId: "abc", options: { urlPattern: "api/cart" } }`,
+• Capture endpoint: { action: "capture", pageId: "abc", options: { urlPattern: "api/cart" } }
+
+**Async Mode (for slow backends):**
+• Stealth backends (camoufox, seleniumbase) use async mode automatically to avoid MCP timeout
+• Returns immediately with jobId: { id: "job:...", jobId: "...", status: "pending" }
+• Check status: { action: "job_status", options: { jobId: "..." } }
+• When status="completed", result contains instanceId to use with other actions`,
       inputSchema: {
         type: 'object',
         properties: {
@@ -476,6 +487,11 @@ Sessions persist across all pools. Just use direct workspace URLs:
       case 'browser_screenshot':
       case 'browser_generate_pdf':
         if (target) result['filePath'] = target;
+        break;
+
+      case 'job_status':
+        // job_status expects jobId, which can be in options or target
+        if (target) result['jobId'] = target;
         break;
 
       default:
