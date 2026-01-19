@@ -12,23 +12,39 @@
  */
 
 // Dynamic import to avoid ESM issues - camoufox is loaded only when needed
-// import { Camoufox } from 'camoufox';
-// import type { LaunchOptions } from 'camoufox';
+// The camoufox package has CJS dependencies that fail with ESM dynamic import
+// We use createRequire() to load it in CJS mode
 import { v4 as uuidv4 } from 'uuid';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
+import { createRequire } from 'module';
+
+// Create a require function for CJS module loading
+const require = createRequire(import.meta.url);
 
 // Lazy-loaded camoufox module
 let CamoufoxClass: any = null;
 
 async function loadCamoufox(): Promise<any> {
   if (!CamoufoxClass) {
-    const module = await import('camoufox');
-    CamoufoxClass = module.Camoufox;
+    try {
+      // Use createRequire to load camoufox in CJS mode
+      // This avoids the "Dynamic require of events is not supported" error
+      const camoufox = require('camoufox');
+      CamoufoxClass = camoufox.Camoufox;
+    } catch (error: unknown) {
+      // If CJS require fails, try ESM import as fallback
+      try {
+        const module = await import('camoufox');
+        CamoufoxClass = module.Camoufox;
+      } catch {
+        throw error; // Re-throw the original error
+      }
+    }
   }
   return CamoufoxClass;
 }
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
 
 import {
   IBrowserBackend,
@@ -77,7 +93,6 @@ export class CamoufoxBackend implements IBrowserBackend {
 
   async isAvailable(): Promise<boolean> {
     try {
-      // Check if camoufox is importable
       const Camoufox = await loadCamoufox();
       return typeof Camoufox === 'function';
     } catch {
@@ -115,8 +130,9 @@ export class CamoufoxBackend implements IBrowserBackend {
         // Human-like cursor movement (built-in)
         humanize: true,
 
-        // Auto-detect GeoIP for locale/timezone
-        geoip: true,
+        // GeoIP disabled by default - requires external API call that may fail
+        // Can be enabled via options if needed
+        geoip: false,
 
         // Block common fingerprinting
         block_webrtc: false, // Keep WebRTC for some sites

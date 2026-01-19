@@ -28,6 +28,41 @@ const results = {
   pollution: []
 };
 
+let messageSent = false;
+
+function sendHandshake() {
+  if (messageSent) return;
+  messageSent = true;
+
+  console.log('→ Sending MCP handshake...');
+
+  const init = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2024-11-05',
+      capabilities: {},
+      clientInfo: { name: 'test', version: '1.0' }
+    }
+  });
+
+  const notif = JSON.stringify({
+    jsonrpc: '2.0',
+    method: 'notifications/initialized'
+  });
+
+  const tools = JSON.stringify({
+    jsonrpc: '2.0',
+    id: 2,
+    method: 'tools/list',
+    params: {}
+  });
+
+  // Send all at once - this works reliably
+  child.stdin.write(init + '\n' + notif + '\n' + tools + '\n');
+}
+
 let stdoutBuffer = '';
 child.stdout.on('data', (data) => {
   stdoutBuffer += data.toString();
@@ -59,44 +94,25 @@ child.stdout.on('data', (data) => {
 });
 
 child.stderr.on('data', (data) => {
-  if (data.toString().includes('started')) {
+  const msg = data.toString();
+  // Server is ready when we see "HydraSpecter MCP Server started"
+  if (msg.includes('MCP Server started')) {
     results.serverStarted = true;
     console.log('✅ Server started');
+    // Send handshake shortly after server announces it's ready
+    setTimeout(sendHandshake, 500);
   }
 });
 
-// Wait for server to start, then send all messages at once
+// Fallback: send after 5 seconds if "started" message not detected
 setTimeout(() => {
-  console.log('→ Sending MCP handshake...');
+  if (!messageSent) {
+    console.log('⚠️ Fallback: sending after timeout');
+    sendHandshake();
+  }
+}, 5000);
 
-  const init = JSON.stringify({
-    jsonrpc: '2.0',
-    id: 1,
-    method: 'initialize',
-    params: {
-      protocolVersion: '2024-11-05',
-      capabilities: {},
-      clientInfo: { name: 'test', version: '1.0' }
-    }
-  });
-
-  const notif = JSON.stringify({
-    jsonrpc: '2.0',
-    method: 'notifications/initialized'
-  });
-
-  const tools = JSON.stringify({
-    jsonrpc: '2.0',
-    id: 2,
-    method: 'tools/list',
-    params: {}
-  });
-
-  // Send all at once - this works reliably
-  child.stdin.write(init + '\n' + notif + '\n' + tools + '\n');
-}, 2500);
-
-// Final report
+// Final report after 12 seconds (increased for backend loading)
 setTimeout(() => {
   child.kill();
 
@@ -110,4 +126,4 @@ setTimeout(() => {
   console.log(`\n${passed ? '✅ ALL TESTS PASSED' : '❌ SOME TESTS FAILED'}`);
 
   process.exit(passed ? 0 : 1);
-}, 6000);
+}, 12000);

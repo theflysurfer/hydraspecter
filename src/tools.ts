@@ -4211,6 +4211,39 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
     instanceId: string,
     options: { selector?: string; expectation?: string; maxElements?: number } = {}
   ): Promise<ToolResult> {
+    // Check if this is a stealth backend instance that needs special handling
+    const instance = this.browserManager.getInstance(instanceId);
+    if (instance && 'backendType' in instance && 'backendInstance' in instance) {
+      const adaptedInstance = instance as any;
+      if (adaptedInstance.backendType === 'seleniumbase') {
+        // Use backend's snapshot method directly for SeleniumBase
+        const backend = adaptedInstance.backend;
+        const backendPage = adaptedInstance.backendInstance.page;
+        const result = await backend.snapshot(backendPage, { format: 'html' });
+
+        if (!result.success) {
+          return { success: false, error: result.error, instanceId };
+        }
+
+        const snapshot = result.data?.content || '';
+        const url = await backendPage.url();
+        const title = await backendPage.title();
+
+        return {
+          success: true,
+          data: {
+            snapshot: `[SeleniumBase HTML snapshot - ${snapshot.length} chars]\n${snapshot.slice(0, 2000)}${snapshot.length > 2000 ? '...' : ''}`,
+            url,
+            title,
+            selector: options.selector || 'body',
+            snapshotLength: snapshot.length,
+            backend: 'seleniumbase'
+          },
+          instanceId
+        };
+      }
+    }
+
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
@@ -4221,7 +4254,22 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         ? pageResult.page.locator(options.selector)
         : pageResult.page.locator('body');
 
-      let snapshot = await locator.ariaSnapshot();
+      let snapshot: string;
+
+      // Try ARIA snapshot first (Playwright), fall back to text content
+      try {
+        if (typeof locator.ariaSnapshot === 'function') {
+          snapshot = await locator.ariaSnapshot();
+        } else {
+          throw new Error('ariaSnapshot not available');
+        }
+      } catch {
+        // Fallback: get text content
+        console.error('[Snapshot] ariaSnapshot not available, falling back to text content');
+        const textContent = await locator.textContent?.();
+        snapshot = textContent || await pageResult.page.evaluate(() => document.body?.innerText || '');
+      }
+
       const url = pageResult.page.url();
       const title = await pageResult.page.title();
       const originalLength = snapshot.length;
@@ -4458,11 +4506,21 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             break;
 
           case 'snapshot':
-            const locator = step.args.selector
+            const batchLocator = step.args.selector
               ? pageResult.page.locator(step.args.selector)
               : pageResult.page.locator('body');
-            const snapshot = await locator.ariaSnapshot();
-            stepResult.result = { snapshot };
+            let batchSnapshot: string;
+            try {
+              if (typeof batchLocator.ariaSnapshot === 'function') {
+                batchSnapshot = await batchLocator.ariaSnapshot();
+              } else {
+                throw new Error('ariaSnapshot not available');
+              }
+            } catch {
+              const textContent = await batchLocator.textContent();
+              batchSnapshot = textContent || await pageResult.page.evaluate(() => document.body.innerText);
+            }
+            stepResult.result = { snapshot: batchSnapshot };
             break;
 
           default:

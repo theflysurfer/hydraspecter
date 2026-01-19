@@ -87,9 +87,84 @@ export class SeleniumBaseBackend implements IBrowserBackend {
     }
   }
 
-  private async runPythonCheck(): Promise<boolean> {
+  /**
+   * Find Python executable path (cross-platform)
+   * Tries multiple methods: env var, py.exe launcher, common paths
+   */
+  private async findPythonPath(): Promise<string> {
+    // 1. Check PYTHON environment variable
+    if (process.env['PYTHON']) {
+      return process.env['PYTHON'];
+    }
+
+    // 2. On Windows, try py.exe launcher first (most reliable)
+    if (process.platform === 'win32') {
+      const pyPath = await this.tryCommand('py', ['-3', '--version']);
+      if (pyPath) return 'py';
+
+      // 3. Try where python to find in PATH
+      const wherePython = await this.tryWhereCommand('python');
+      if (wherePython) return wherePython;
+
+      // 4. Check common Windows Python paths
+      const commonPaths = [
+        'C:\\Python313\\python.exe',
+        'C:\\Python312\\python.exe',
+        'C:\\Python311\\python.exe',
+        'C:\\Python310\\python.exe',
+        'C:\\Python39\\python.exe',
+        `${process.env['LOCALAPPDATA']}\\Programs\\Python\\Python313\\python.exe`,
+        `${process.env['LOCALAPPDATA']}\\Programs\\Python\\Python312\\python.exe`,
+        `${process.env['LOCALAPPDATA']}\\Programs\\Python\\Python311\\python.exe`,
+        `${process.env['LOCALAPPDATA']}\\Programs\\Python\\Python310\\python.exe`,
+        `${process.env['USERPROFILE']}\\AppData\\Local\\Programs\\Python\\Python313\\python.exe`,
+        `${process.env['USERPROFILE']}\\AppData\\Local\\Programs\\Python\\Python312\\python.exe`,
+        `${process.env['USERPROFILE']}\\AppData\\Local\\Programs\\Python\\Python311\\python.exe`,
+      ];
+
+      for (const p of commonPaths) {
+        if (p && fs.existsSync(p)) {
+          return p;
+        }
+      }
+    }
+
+    // 5. Default fallback
+    return process.platform === 'win32' ? 'py' : 'python3';
+  }
+
+  private async tryCommand(cmd: string, args: string[]): Promise<boolean> {
     return new Promise((resolve) => {
-      const proc = spawn('python', ['-c', 'import seleniumbase; print("ok")'], {
+      const proc = spawn(cmd, args, { stdio: 'ignore', timeout: 3000 });
+      proc.on('close', (code) => resolve(code === 0));
+      proc.on('error', () => resolve(false));
+    });
+  }
+
+  private async tryWhereCommand(cmd: string): Promise<string | null> {
+    return new Promise((resolve) => {
+      const proc = spawn('where', [cmd], { stdio: ['ignore', 'pipe', 'ignore'], timeout: 3000 });
+      let output = '';
+      proc.stdout?.on('data', (data) => { output += data.toString(); });
+      proc.on('close', (code) => {
+        if (code === 0 && output.trim()) {
+          // Return first path found
+          const firstPath = output.trim().split('\n')[0];
+          resolve(firstPath ? firstPath.trim() : null);
+        } else {
+          resolve(null);
+        }
+      });
+      proc.on('error', () => resolve(null));
+    });
+  }
+
+  private async runPythonCheck(): Promise<boolean> {
+    const pythonPath = await this.findPythonPath();
+    const args = pythonPath === 'py' ? ['-3', '-c', 'import seleniumbase; print("ok")'] : ['-c', 'import seleniumbase; print("ok")'];
+
+    return new Promise((resolve) => {
+      const proc = spawn(pythonPath, args, {
         stdio: ['ignore', 'pipe', 'ignore'],
         timeout: 5000,
       });
@@ -135,8 +210,14 @@ export class SeleniumBaseBackend implements IBrowserBackend {
         await this.createPythonBridgeScript();
       }
 
-      // Start Python subprocess
-      const proc = spawn('python', [this.pythonScriptPath], {
+      // Find Python executable and start subprocess
+      const pythonPath = await this.findPythonPath();
+      // If using py.exe launcher, add -3 flag for Python 3
+      const pythonArgs = pythonPath === 'py'
+        ? ['-3', this.pythonScriptPath]
+        : [this.pythonScriptPath];
+
+      const proc = spawn(pythonPath, pythonArgs, {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: {
           ...process.env,
