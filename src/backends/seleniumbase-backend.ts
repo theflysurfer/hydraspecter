@@ -68,8 +68,12 @@ export class SeleniumBaseBackend implements IBrowserBackend {
 
   constructor() {
     // Python script path (bundled with HydraSpecter)
+    // Use decodeURIComponent to handle spaces in path (e.g., "Projets de code")
+    const basePath = decodeURIComponent(
+      new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')
+    );
     this.pythonScriptPath = path.join(
-      path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Z]:)/, '$1')),
+      path.dirname(basePath),
       '..',
       '..',
       'scripts',
@@ -211,12 +215,16 @@ export class SeleniumBaseBackend implements IBrowserBackend {
       }
 
       // Find Python executable and start subprocess
+      console.error('[SeleniumBase] Finding Python executable...');
       const pythonPath = await this.findPythonPath();
+      console.error(`[SeleniumBase] Python path: ${pythonPath}`);
       // If using py.exe launcher, add -3 flag for Python 3
       const pythonArgs = pythonPath === 'py'
         ? ['-3', this.pythonScriptPath]
         : [this.pythonScriptPath];
 
+      console.error(`[SeleniumBase] Spawning process: ${pythonPath} ${pythonArgs.join(' ')}`);
+      console.error(`[SeleniumBase] Profile dir: ${profileDir}`);
       const proc = spawn(pythonPath, pythonArgs, {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: {
@@ -301,6 +309,8 @@ export class SeleniumBaseBackend implements IBrowserBackend {
       this.instances.set(id, { process: proc, readline: rl, pending, instance });
 
       // Initialize browser
+      console.error('[SeleniumBase] Process spawned, sending init command...');
+      const initStartTime = Date.now();
       const initResult = await this.sendCommand(id, 'init', {
         profileDir,
         headless: options.headless ?? false,
@@ -309,7 +319,9 @@ export class SeleniumBaseBackend implements IBrowserBackend {
         windowPosition: options.windowPosition,
       });
 
+      console.error(`[SeleniumBase] Init completed in ${Date.now() - initStartTime}ms, success: ${initResult.success}`);
       if (!initResult.success) {
+        console.error(`[SeleniumBase] Init failed: ${initResult.error}`);
         await this.close(instance);
         return {
           success: false,
@@ -319,12 +331,16 @@ export class SeleniumBaseBackend implements IBrowserBackend {
 
       // Navigate to initial URL if provided
       if (options.url) {
+        console.error(`[SeleniumBase] Navigating to: ${options.url}`);
+        const navStartTime = Date.now();
         const navResult = await this.sendCommand(id, 'navigate', { url: options.url });
+        console.error(`[SeleniumBase] Navigation completed in ${Date.now() - navStartTime}ms, success: ${navResult.success}`);
         if (!navResult.success) {
           console.error('[SeleniumBase] Initial navigation failed:', navResult.error);
         }
       }
 
+      console.error('[SeleniumBase] Instance created successfully');
       return {
         success: true,
         data: instance,
@@ -340,11 +356,13 @@ export class SeleniumBaseBackend implements IBrowserBackend {
   private async sendCommand(instanceId: string, method: string, params: Record<string, any>): Promise<PythonResponse> {
     const stored = this.instances.get(instanceId);
     if (!stored) {
+      console.error(`[SeleniumBase] sendCommand: Instance ${instanceId} not found`);
       return { id: '', success: false, error: 'Instance not found' };
     }
 
     const cmdId = uuidv4();
     const command: PythonCommand = { id: cmdId, method, params };
+    console.error(`[SeleniumBase] Sending command: ${method} (id: ${cmdId.slice(0, 8)})`);
 
     return new Promise((resolve, reject) => {
       stored.pending.set(cmdId, { resolve, reject });
@@ -352,13 +370,14 @@ export class SeleniumBaseBackend implements IBrowserBackend {
       // Send command as JSON line
       stored.process.stdin?.write(JSON.stringify(command) + '\n');
 
-      // Timeout after 30 seconds
+      // Timeout after 60 seconds (increased from 30)
       setTimeout(() => {
         if (stored.pending.has(cmdId)) {
           stored.pending.delete(cmdId);
-          resolve({ id: cmdId, success: false, error: 'Command timed out' });
+          console.error(`[SeleniumBase] Command ${method} timed out after 60s`);
+          resolve({ id: cmdId, success: false, error: `Command ${method} timed out after 60s` });
         }
-      }, 30000);
+      }, 60000);
     });
   }
 
