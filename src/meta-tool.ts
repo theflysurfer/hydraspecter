@@ -102,6 +102,10 @@ const ACTION_MAP: Record<string, string> = {
 
   // Gmail export monitoring
   'wait_export_email': 'browser_wait_export_email',
+
+  // Export status
+  'get_export_status': 'browser_get_export_status',
+  'export_status': 'browser_get_export_status',
 };
 
 // Actions grouped by category for help (used in tool description)
@@ -145,6 +149,7 @@ export class MetaTool {
 • Anti-detection: solve_turnstile (Cloudflare Turnstile auto-click)
 • Export: export_perplexity, export_chatgpt, export_claude (request data export from settings)
 • Gmail: wait_export_email (monitor Gmail for export emails and auto-download)
+• Status: get_export_status (read current export progress, no pageId needed)
 • Advanced: evaluate, batch, protection
 
 **Auth-Required Sites (Notion, Gmail, etc.):**

@@ -2099,6 +2099,43 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             domain: { type: 'string' }
           }
         }
+      },
+
+      // Export status (global, no pageId required)
+      {
+        name: 'browser_get_export_status',
+        description: `Get current export status from ~/.hydraspecter/export-status.json.
+
+Returns the current export progress for long-running exports (Perplexity, ChatGPT, Claude).
+No pageId required - this is a global status check.
+
+**Returns:**
+- If no export running: { status: 'no_export_running' }
+- If export in progress: { source, status, progress: { current, total }, startedAt, lastUpdate, currentStep, errors }
+
+**Status values:** starting, waiting_email, downloading, extracting, converting, exporting, completed, failed`,
+        inputSchema: {
+          type: 'object',
+          properties: {}
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            status: { type: 'string', description: 'Export status or "no_export_running"' },
+            source: { type: 'string', description: 'Export source (chatgpt, claude, perplexity)' },
+            progress: {
+              type: 'object',
+              properties: {
+                current: { type: 'number' },
+                total: { type: 'number' }
+              }
+            },
+            startedAt: { type: 'string' },
+            lastUpdate: { type: 'string' },
+            currentStep: { type: 'string' },
+            errors: { type: 'array', items: { type: 'string' } }
+          }
+        }
       }
     ];
   }
@@ -3325,6 +3362,35 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             result = {
               success: false,
               error: `List sessions failed: ${error instanceof Error ? error.message : error}`
+            };
+          }
+          break;
+        }
+
+        case 'browser_get_export_status': {
+          // Read export status from ~/.hydraspecter/export-status.json
+          // No pageId required - this is a global status check
+          try {
+            const { readExportStatus } = await import('./exporters/export-status.js');
+            const exportStatus = readExportStatus();
+
+            if (exportStatus === null) {
+              result = {
+                success: true,
+                data: {
+                  status: 'no_export_running'
+                }
+              };
+            } else {
+              result = {
+                success: true,
+                data: exportStatus
+              };
+            }
+          } catch (error) {
+            result = {
+              success: false,
+              error: `Failed to read export status: ${error instanceof Error ? error.message : error}`
             };
           }
           break;
