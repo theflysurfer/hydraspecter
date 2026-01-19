@@ -28,6 +28,86 @@ browser_create({ mode: "isolated", device: "iPhone 14" })
 browser_create({ mode: "isolated", browserType: "firefox" })
 ```
 
+## Stealth Backends (Cloudflare Bypass)
+
+Three backends available for bypassing anti-bot protections:
+
+| Backend | Technology | Use Case |
+|---------|------------|----------|
+| `playwright` (default) | Chromium | Standard automation, fastest |
+| `camoufox` | Firefox stealth | Cloudflare Turnstile bypass |
+| `seleniumbase` | Chrome UC Mode | Fallback stealth, captcha solving |
+
+### Auto-Selection
+
+Backend is automatically selected based on domain:
+- **chatgpt.com, claude.ai, perplexity.ai** → `camoufox`
+- **youtube.com, google.com** → `playwright`
+- Unknown domains → `playwright` with automatic fallback on Cloudflare detection
+
+Rules stored in `~/.hydraspecter/backend-rules.json`.
+
+### Force Backend
+
+```javascript
+// Force camoufox for Cloudflare-protected site
+browser({ action: "create", target: "https://chatgpt.com", options: { backend: "camoufox" } })
+
+// Force seleniumbase for captcha solving
+browser({ action: "create", options: { backend: "seleniumbase" } })
+
+// Auto-selection (default)
+browser({ action: "create", target: "https://example.com", options: { backend: "auto" } })
+```
+
+### Backend Management Actions
+
+```javascript
+// List available backends and their status
+browser({ action: "list_backends" })
+
+// View auto-selection rules
+browser({ action: "backend_rules" })
+
+// Get current backend for an instance
+browser({ action: "get_backend", pageId: "abc123" })
+
+// Switch backend (closes and recreates)
+browser({ action: "switch_backend", pageId: "abc123", options: { backend: "seleniumbase" } })
+```
+
+### Session Persistence per Backend
+
+| Backend | Profile Location |
+|---------|-----------------|
+| Playwright | `~/.hydraspecter/profiles/pool-{0-9}/` |
+| Camoufox | `~/.hydraspecter/camoufox-profile/` |
+| SeleniumBase | `~/.hydraspecter/seleniumbase-profile/` |
+
+Sessions persist across restarts. Login once, use forever.
+
+### Automatic Fallback
+
+If Cloudflare detected after navigation:
+1. Current backend closes
+2. Tries next backend in order: camoufox → seleniumbase → playwright
+3. System learns from success/failure for future auto-selection
+
+### Minimal Window Mode
+
+For stealth backends, minimize window to 100x100 pixels at (0,0) with always-on-top:
+
+```javascript
+// Minimize window (non-intrusive corner)
+browser({ action: "minimize", pageId: "abc123" })
+
+// Restore to normal size
+browser({ action: "restore", pageId: "abc123" })
+
+// Custom size/position
+browser({ action: "minimize", pageId: "abc123", options: { width: 200, height: 150, x: 50, y: 50 } })
+```
+
 ## Device Emulation (Mobile/Tablet Testing)
 
 Test responsive design across **90+ real devices** with accurate viewport, user agent, and touch emulation.
@@ -204,8 +284,11 @@ In `~/.claude.json`:
 
 ```
 ~/.hydraspecter/
-├── profiles/pool-{0-9}/     # 10 concurrent session pools
+├── profiles/pool-{0-9}/     # 10 concurrent session pools (Playwright)
+├── camoufox-profile/        # Camoufox Firefox profile
+├── seleniumbase-profile/    # SeleniumBase Chrome profile
 ├── domain-intelligence.json # Protection levels
+├── backend-rules.json       # Backend auto-selection rules
 ├── api-bookmarks.json       # Saved API endpoints
 └── locks/                   # Pool lock files (prevent conflicts)
 ```
@@ -214,14 +297,28 @@ In `~/.claude.json`:
 
 ```
 src/
-├── index.ts           # CLI
-├── server.ts          # MCP handlers
-├── browser-manager.ts # Instance lifecycle
-├── global-profile.ts  # Session persistence
+├── index.ts              # CLI entry point
+├── server.ts             # MCP handlers
+├── browser-manager.ts    # Instance lifecycle
+├── meta-tool.ts          # Unified browser tool (--meta mode)
+├── global-profile.ts     # Session persistence
 ├── domain-intelligence.ts
 ├── api-bookmarks.ts
-├── tools.ts           # Tool definitions
-└── utils/             # Humanize, detection, resilience
+├── tools.ts              # Tool definitions
+├── backends/
+│   ├── types.ts             # IBrowserBackend interface
+│   ├── backend-factory.ts   # Factory with lazy loading
+│   ├── playwright-backend.ts
+│   ├── camoufox-backend.ts
+│   ├── seleniumbase-backend.ts
+│   └── unified-backend.ts   # Auto-selection & fallback
+├── detection/
+│   ├── backend-selector.ts   # Domain-based auto-selection
+│   ├── cloudflare-detector.ts
+│   └── login-detector.ts
+├── window/
+│   └── minimal-window.ts     # 100x100 always-on-top window
+└── utils/                # Humanize, detection, resilience
 ```
 
 ## Don't

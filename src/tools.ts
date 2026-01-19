@@ -139,6 +139,26 @@ export class BrowserTools {
   }
 
   /**
+   * Get a Page object by instance ID (public method for MetaTool)
+   * @param instanceId The instance or page ID
+   * @returns Page object or null if not found
+   */
+  public getPage(instanceId: string): Page | null {
+    // Check global pages first
+    if (this.globalPages.has(instanceId)) {
+      return this.globalPages.get(instanceId) || null;
+    }
+
+    // Check browser manager instances
+    const instance = this.browserManager.getInstance(instanceId);
+    if (instance) {
+      return instance.page;
+    }
+
+    return null;
+  }
+
+  /**
    * Convert internal ToolResult to MCP-compliant CallToolResult format
    */
   private toMcpResult(result: ToolResult, options?: { isImage?: boolean }): CallToolResult {
@@ -373,25 +393,6 @@ export class BrowserTools {
    */
   getAvailableDevices(): string[] {
     return Object.keys(devices);
-  }
-
-  /**
-   * Get page by instance ID or page ID
-   * Checks both browserManager instances and globalPages
-   */
-  private async getPage(instanceId: string): Promise<Page | null> {
-    // Check global pages first
-    if (this.globalPages.has(instanceId)) {
-      return this.globalPages.get(instanceId)!;
-    }
-
-    // Check browser manager instances
-    const instance = this.browserManager.getInstance(instanceId);
-    if (instance) {
-      return instance.page;
-    }
-
-    return null;
   }
 
   /**
@@ -2245,7 +2246,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
         // Console logs
         case 'browser_enable_console_capture': {
-          const page = await this.getPage(args.instanceId);
+          const page = this.getPage(args.instanceId);
           if (!page) {
             result = { success: false, error: `Instance ${args.instanceId} not found` };
           } else {
@@ -2294,7 +2295,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
         // Network monitoring
         case 'browser_enable_network_monitoring': {
-          const page = await this.getPage(args.instanceId);
+          const page = this.getPage(args.instanceId);
           if (!page) {
             result = { success: false, error: `Instance ${args.instanceId} not found` };
           } else {
@@ -2373,7 +2374,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
         // PDF generation
         case 'browser_generate_pdf': {
-          const page = await this.getPage(args.instanceId);
+          const page = this.getPage(args.instanceId);
           if (!page) {
             result = { success: false, error: `Instance ${args.instanceId} not found` };
           } else {
@@ -2422,7 +2423,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
         // Download handling
         case 'browser_wait_for_download': {
-          const page = await this.getPage(args.instanceId);
+          const page = this.getPage(args.instanceId);
           if (!page) {
             result = { success: false, error: `Instance ${args.instanceId} not found` };
           } else {
@@ -2456,7 +2457,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         }
 
         case 'browser_wait_for_request': {
-          const page = await this.getPage(args.instanceId);
+          const page = this.getPage(args.instanceId);
           if (!page) {
             result = { success: false, error: `Instance ${args.instanceId} not found` };
           } else if (!this.networkMonitoringEnabled.has(args.instanceId)) {

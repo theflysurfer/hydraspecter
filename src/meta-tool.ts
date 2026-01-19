@@ -9,6 +9,9 @@
 
 import { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { BrowserTools } from './tools.js';
+import { BackendFactory, BackendType } from './backends/index.js';
+import { getBackendSelector } from './detection/index.js';
+import { getMinimalWindowManager } from './window/index.js';
 
 // Action mappings: short action name → internal tool name
 const ACTION_MAP: Record<string, string> = {
@@ -81,6 +84,16 @@ const ACTION_MAP: Record<string, string> = {
   'delete_endpoint': 'browser_delete_endpoint',
   'capture_endpoint': 'browser_capture_from_network',
   'capture': 'browser_capture_from_network',
+
+  // Backend management (handled directly in MetaTool)
+  'get_backend': '_meta_get_backend',
+  'switch_backend': '_meta_switch_backend',
+  'list_backends': '_meta_list_backends',
+  'backend_rules': '_meta_backend_rules',
+
+  // Window management (handled directly in MetaTool)
+  'minimize': '_meta_minimize',
+  'restore': '_meta_restore',
 };
 
 // Actions grouped by category for help (used in tool description)
@@ -121,7 +134,17 @@ export class MetaTool {
 • Debug: enable_network, network, enable_console, console
 • Endpoints: capture, list_endpoints, save_endpoint, get_endpoint
 • Devices: devices (list 90+ devices for mobile/tablet emulation)
+• Backends: get_backend, switch_backend, list_backends, backend_rules
 • Advanced: evaluate, batch, protection
+
+**Backend Selection (Cloudflare bypass):**
+• Auto-selection: { action: "create", target: "https://chatgpt.com" } // auto-selects camoufox
+• Force backend: { action: "create", target: "https://...", options: { backend: "camoufox" } }
+• Available backends: "playwright" (default), "camoufox" (Firefox stealth), "seleniumbase" (Chrome UC)
+• Get backend: { action: "get_backend", pageId: "abc" }
+• Switch backend: { action: "switch_backend", pageId: "abc", options: { backend: "seleniumbase" } }
+• List backends: { action: "list_backends" }
+• View rules: { action: "backend_rules" }
 
 **Auth-Required Sites (Notion, Gmail, etc.):**
 Sessions persist across all pools. Just use direct workspace URLs:
@@ -222,6 +245,11 @@ Sessions persist across all pools. Just use direct workspace URLs:
       };
     }
 
+    // Handle meta actions directly (backend management)
+    if (internalTool.startsWith('_meta_')) {
+      return this.handleMetaAction(internalTool, { pageId: pageId || instanceId, options });
+    }
+
     // Build arguments for internal tool
     const internalArgs = this.buildInternalArgs(internalTool, {
       pageId: pageId || instanceId,
@@ -232,6 +260,170 @@ Sessions persist across all pools. Just use direct workspace URLs:
 
     // Execute internal tool
     return await this.browserTools.executeTools(internalTool, internalArgs);
+  }
+
+  /**
+   * Handle meta actions (backend management)
+   */
+  private async handleMetaAction(action: string, args: { pageId?: string; options?: Record<string, any> }): Promise<CallToolResult> {
+    const selector = getBackendSelector();
+
+    switch (action) {
+      case '_meta_list_backends': {
+        const info = await BackendFactory.getInfo();
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              backends: info,
+              note: 'Use options.backend in create action to force a specific backend',
+            }, null, 2),
+          }],
+          isError: false,
+        };
+      }
+
+      case '_meta_get_backend': {
+        if (!args.pageId) {
+          return {
+            content: [{ type: 'text', text: 'pageId required for get_backend action' }],
+            isError: true,
+          };
+        }
+        // Note: This would need integration with BrowserTools to track backend per instance
+        // For now, return the current implementation note
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              note: 'Backend tracking per instance not yet implemented. Use list_backends to see available backends.',
+              instanceId: args.pageId,
+            }, null, 2),
+          }],
+          isError: false,
+        };
+      }
+
+      case '_meta_switch_backend': {
+        if (!args.pageId) {
+          return {
+            content: [{ type: 'text', text: 'pageId required for switch_backend action' }],
+            isError: true,
+          };
+        }
+        const newBackend = args.options?.['backend'] as BackendType;
+        if (!newBackend || !['playwright', 'camoufox', 'seleniumbase'].includes(newBackend)) {
+          return {
+            content: [{ type: 'text', text: 'Valid backend required in options: playwright, camoufox, or seleniumbase' }],
+            isError: true,
+          };
+        }
+        // Note: Full switch would require closing and recreating with new backend
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              note: 'Backend switching requires closing the current instance and creating a new one.',
+              suggestion: `Use: { action: "close", pageId: "${args.pageId}" } then { action: "create", options: { backend: "${newBackend}" } }`,
+            }, null, 2),
+          }],
+          isError: false,
+        };
+      }
+
+      case '_meta_backend_rules': {
+        const rules = selector.getRules();
+        return {
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              rules: rules.slice(0, 20), // Limit to first 20
+              totalRules: rules.length,
+              note: 'Rules are automatically applied when creating instances with URLs',
+            }, null, 2),
+          }],
+          isError: false,
+        };
+      }
+
+      case '_meta_minimize': {
+        if (!args.pageId) {
+          return {
+            content: [{ type: 'text', text: 'pageId required for minimize action' }],
+            isError: true,
+          };
+        }
+        try {
+          const page = this.browserTools.getPage(args.pageId);
+          if (!page) {
+            return {
+              content: [{ type: 'text', text: `Instance ${args.pageId} not found` }],
+              isError: true,
+            };
+          }
+          const windowManager = getMinimalWindowManager();
+          await windowManager.setMinimal(page, args.options);
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                message: 'Window minimized to 100x100 at (0, 0) with always-on-top',
+                instanceId: args.pageId,
+              }, null, 2),
+            }],
+            isError: false,
+          };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: `Minimize failed: ${error instanceof Error ? error.message : error}` }],
+            isError: true,
+          };
+        }
+      }
+
+      case '_meta_restore': {
+        if (!args.pageId) {
+          return {
+            content: [{ type: 'text', text: 'pageId required for restore action' }],
+            isError: true,
+          };
+        }
+        try {
+          const page = this.browserTools.getPage(args.pageId);
+          if (!page) {
+            return {
+              content: [{ type: 'text', text: `Instance ${args.pageId} not found` }],
+              isError: true,
+            };
+          }
+          const windowManager = getMinimalWindowManager();
+          await windowManager.restore(page);
+          return {
+            content: [{
+              type: 'text',
+              text: JSON.stringify({
+                success: true,
+                message: 'Window restored to normal size',
+                instanceId: args.pageId,
+              }, null, 2),
+            }],
+            isError: false,
+          };
+        } catch (error) {
+          return {
+            content: [{ type: 'text', text: `Restore failed: ${error instanceof Error ? error.message : error}` }],
+            isError: true,
+          };
+        }
+      }
+
+      default:
+        return {
+          content: [{ type: 'text', text: `Unknown meta action: ${action}` }],
+          isError: true,
+        };
+    }
   }
 
   /**

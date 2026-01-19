@@ -13,7 +13,9 @@
     "start": "node dist/index.js",
     "test": "vitest",
     "test:mcp": "node tests/test-mcp.cjs",
+    "test:cloudflare": "SKIP_SLOW_TESTS=false vitest run tests/integration/cloudflare-bypass.test.ts",
     "test:proxy": "node test-proxy.js",
+    "typecheck": "tsc --noEmit",
     "benchmark": "node benchmark/run-benchmark.js",
     "prepare": "npm run build"
   },
@@ -44,6 +46,7 @@
     "@modelcontextprotocol/sdk": "^1.25.2",
     "@types/sqlite3": "^3.1.11",
     "better-sqlite3": "^12.6.0",
+    "camoufox": "^0.1.19",
     "chalk": "^5.3.0",
     "chrome-remote-interface": "^0.33.3",
     "commander": "^12.0.0",
