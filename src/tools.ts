@@ -4454,8 +4454,8 @@ No pageId required - this is a global status check.
         }
 
         case 'browser_full_export': {
-          // Full export orchestration: export_chatgpt → wait_export_email → extract ZIP → convert to Markdown
-          // Supports: { source: 'chatgpt' } (claude support planned)
+          // Full export orchestration: export_chatgpt/claude → wait_export_email → extract ZIP → convert to Markdown
+          // Supports: { source: 'chatgpt' } or { source: 'claude' }
           const seleniumInstance = this.seleniumBaseInstances.get(args.instanceId);
           if (!seleniumInstance) {
             result = {
@@ -4666,19 +4666,35 @@ No pageId required - this is a global status check.
 
                 // Convert each conversation to Markdown
                 for (const conv of (Array.isArray(conversations) ? conversations : [])) {
-                  const title = conv.title || 'Untitled';
+                  // Handle both ChatGPT and Claude formats
+                  const title = conv.title || conv.name || 'Untitled';
                   const sanitizedTitle = title.replace(/[<>:"/\\|?*]/g, '-').slice(0, 100);
-                  const convId = conv.id || conv.conversation_id || Date.now().toString();
+                  const convId = conv.id || conv.conversation_id || conv.uuid || Date.now().toString();
                   const filename = `${sanitizedTitle}-${convId.slice(0, 8)}.md`;
                   const filepath = path.join(markdownDir, filename);
 
                   // Build Markdown content
                   let markdown = `# ${title}\n\n`;
-                  markdown += `**Created:** ${conv.create_time ? new Date(conv.create_time * 1000).toISOString() : 'Unknown'}\n`;
-                  markdown += `**Updated:** ${conv.update_time ? new Date(conv.update_time * 1000).toISOString() : 'Unknown'}\n\n`;
+
+                  // Handle timestamps - ChatGPT uses unix timestamps, Claude uses ISO strings
+                  let createdAt = 'Unknown';
+                  let updatedAt = 'Unknown';
+                  if (conv.create_time) {
+                    createdAt = new Date(conv.create_time * 1000).toISOString();
+                  } else if (conv.created_at) {
+                    createdAt = new Date(conv.created_at).toISOString();
+                  }
+                  if (conv.update_time) {
+                    updatedAt = new Date(conv.update_time * 1000).toISOString();
+                  } else if (conv.updated_at) {
+                    updatedAt = new Date(conv.updated_at).toISOString();
+                  }
+                  markdown += `**Created:** ${createdAt}\n`;
+                  markdown += `**Updated:** ${updatedAt}\n\n`;
                   markdown += `---\n\n`;
 
                   // Extract messages from the conversation
+                  // ChatGPT format: conv.mapping with nested message objects
                   if (conv.mapping) {
                     const messages = Object.values(conv.mapping) as Array<{
                       message?: {
@@ -4699,6 +4715,18 @@ No pageId required - this is a global status check.
 
                       if (content.trim()) {
                         const roleLabel = role === 'user' ? '**User**' : role === 'assistant' ? '**Assistant**' : `**${role}**`;
+                        markdown += `${roleLabel}:\n\n${content}\n\n---\n\n`;
+                      }
+                    }
+                  }
+                  // Claude format: conv.chat_messages array with sender and text
+                  else if (conv.chat_messages && Array.isArray(conv.chat_messages)) {
+                    for (const msg of conv.chat_messages) {
+                      const sender = msg.sender || 'unknown';
+                      const content = msg.text || '';
+
+                      if (content.trim()) {
+                        const roleLabel = sender === 'human' ? '**User**' : sender === 'assistant' ? '**Assistant**' : `**${sender}**`;
                         markdown += `${roleLabel}:\n\n${content}\n\n---\n\n`;
                       }
                     }
