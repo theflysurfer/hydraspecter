@@ -105,48 +105,38 @@ export class CamoufoxBackend implements IBrowserBackend {
       const id = uuidv4();
 
       // Profile directory for persistence
+      // NOTE: data_dir causes launchPersistentContext to crash on Windows
+      // See: browserType.launchPersistentContext: Target page, context or browser has been closed
+      // For now, we disable persistence until the bug is fixed in camoufox
       const profileDir = options.profileDir || path.join(
         os.homedir(),
         '.hydraspecter',
         'camoufox-profile'
       );
 
-      // Ensure profile directory exists
+      // Ensure profile directory exists (for future use when persistence is fixed)
       if (!fs.existsSync(profileDir)) {
         fs.mkdirSync(profileDir, { recursive: true });
       }
 
-      // Camoufox launch options (using any since LaunchOptions is from dynamic import)
+      // Camoufox launch options - MINIMAL config that works on Windows
+      // Many options cause crashes or conflicts with rebrowser-playwright
       const launchOptions: any = {
-        // Persistence via data_dir
-        data_dir: profileDir,
-
         // Anti-detection: headless is risky for stealth
         headless: options.headless ?? false,
 
-        // Operating system fingerprint (match real system)
-        os: process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux',
-
-        // Human-like cursor movement (built-in)
-        humanize: true,
-
-        // GeoIP disabled by default - requires external API call that may fail
-        // Can be enabled via options if needed
+        // GeoIP disabled - requires external API call that may fail
         geoip: false,
 
-        // Block common fingerprinting
-        block_webrtc: false, // Keep WebRTC for some sites
-        block_webgl: false,  // WebGL is common, blocking is suspicious
+        // DISABLED options that cause issues on Windows:
+        // - data_dir: causes launchPersistentContext crash
+        // - humanize: can conflict with page scripts
+        // - os: type validation issues
+        // - window: causes window.screenY type error
+        // - block_webrtc/block_webgl: not needed
 
-        // Window size
-        window: options.windowSize
-          ? [options.windowSize.width, options.windowSize.height]
-          : options.viewport
-            ? [options.viewport.width, options.viewport.height]
-            : [1280, 720],
-
-        // Proxy support
-        proxy: options.proxy,
+        // Proxy support (only if explicitly provided)
+        ...(options.proxy ? { proxy: options.proxy } : {}),
       };
 
       // Launch Camoufox - returns Browser or BrowserContext
@@ -170,8 +160,14 @@ export class CamoufoxBackend implements IBrowserBackend {
       }
 
       // Navigate to initial URL if provided
+      // Use longer timeout and don't fail the whole creation if navigation times out
       if (options.url) {
-        await page.goto(options.url, { waitUntil: 'domcontentloaded' });
+        try {
+          await page.goto(options.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        } catch (navError) {
+          console.error(`[CamoufoxBackend] Navigation to ${options.url} failed: ${navError}. Browser created, user can navigate manually.`);
+          // Don't fail - browser is still usable
+        }
       }
 
       const backendPage = wrapPage(page, `page-${uuidv4().slice(0, 8)}`);
