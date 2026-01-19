@@ -37,8 +37,8 @@ const HTTP_BRIDGE_SCRIPT = path.join(os.homedir(), '.hydraspecter', 'seleniumbas
 const SESSION_STATE_DIR = path.join(os.homedir(), '.hydraspecter', 'sessions');
 const SELENIUMBASE_PROFILE_DIR = path.join(os.homedir(), '.hydraspecter', 'seleniumbase-profile');
 
-/** Maximum driver reinit attempts per operation */
-const MAX_REINIT_ATTEMPTS = 3;
+/** Maximum driver reinit attempts per operation (US-003: max 2 reinitializations before abandon) */
+const MAX_REINIT_ATTEMPTS = 2;
 
 /**
  * Error patterns that indicate a session error requiring driver reinit.
@@ -247,12 +247,38 @@ let currentInstanceId: string | null = null;
 /** Current headless setting for reinit */
 let currentHeadlessSetting: boolean = false;
 
+/** Store last known URL for each instance (for resuming after reinit) */
+const lastKnownUrls: Map<string, string> = new Map();
+
 /**
- * Reinitialize the driver after a session error.
- * Sends quit command, waits, then reinits with the same profile.
+ * Update the last known URL for an instance (called after navigation)
  */
-async function reinitializeDriver(): Promise<void> {
-  console.error('[SeleniumBase HTTP] Reinitializing driver...');
+export function updateLastKnownUrl(instanceId: string, url: string): void {
+  if (url && url !== 'about:blank') {
+    lastKnownUrls.set(instanceId, url);
+  }
+}
+
+/**
+ * Get the last known URL for an instance
+ */
+export function getLastKnownUrl(instanceId: string): string | undefined {
+  return lastKnownUrls.get(instanceId);
+}
+
+/**
+ * Reinitialize the SeleniumBase driver after a session error.
+ * Sends quit command to HTTP bridge, recreates the driver, and navigates to last known URL.
+ * Preserves the same instanceId for the caller.
+ *
+ * @param instanceId - The instance ID to reinitialize (will be preserved)
+ * @returns The same instanceId after successful reinitialization
+ */
+export async function reinitializeSeleniumDriver(instanceId: string): Promise<string> {
+  console.error('[SeleniumBase] Reinitializing driver...');
+
+  // Get last known URL before reinit
+  const lastUrl = lastKnownUrls.get(instanceId);
 
   // Step 1: Quit the old driver
   try {
@@ -261,17 +287,16 @@ async function reinitializeDriver(): Promise<void> {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'quit', params: {} }),
     });
-    console.error('[SeleniumBase HTTP] Old driver quit successfully');
+    console.error('[SeleniumBase] Old driver quit successfully');
   } catch (e) {
     // Driver might already be dead, that's fine
-    console.error('[SeleniumBase HTTP] Driver quit failed (expected if already dead)');
+    console.error('[SeleniumBase] Driver quit failed (expected if already dead)');
   }
 
   // Step 2: Wait for cleanup
   await new Promise(resolve => setTimeout(resolve, 1000));
 
-  // Step 3: Reinitialize with the same profile
-  const instanceId = currentInstanceId || `sb-${uuidv4().substring(0, 8)}`;
+  // Step 3: Reinitialize with the same profile, preserving instanceId
   const initResponse = await fetch(BRIDGE_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -279,7 +304,7 @@ async function reinitializeDriver(): Promise<void> {
       action: 'init',
       params: {
         headless: currentHeadlessSetting,
-        instanceId,
+        instanceId, // Preserve the same instanceId for the caller
         profileDir: SELENIUMBASE_PROFILE_DIR,
       },
     }),
@@ -295,8 +320,33 @@ async function reinitializeDriver(): Promise<void> {
     throw new Error(`Failed to reinitialize driver: ${result.error}`);
   }
 
+  // Update the current instance ID
   currentInstanceId = instanceId;
-  console.error(`[SeleniumBase HTTP] Driver reinitialized: ${instanceId}`);
+
+  // Step 4: Navigate to last known URL after reinit
+  if (lastUrl) {
+    console.error(`[SeleniumBase] Navigating to last known URL: ${lastUrl}`);
+    try {
+      await fetch(BRIDGE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'navigate', params: { url: lastUrl } }),
+      });
+    } catch (e) {
+      console.error(`[SeleniumBase] Failed to navigate to last URL: ${e}`);
+    }
+  }
+
+  console.error('[SeleniumBase] Driver reinitialized, resuming operation...');
+  return instanceId;
+}
+
+/**
+ * Internal reinitializeDriver for backward compatibility (used by sendHttpCommand retry logic)
+ */
+async function reinitializeDriver(): Promise<void> {
+  const instanceId = currentInstanceId || `sb-${uuidv4().substring(0, 8)}`;
+  await reinitializeSeleniumDriver(instanceId);
 }
 
 /**
@@ -432,18 +482,30 @@ export class SeleniumBaseHttpPage implements IBrowserPage {
   async goto(url: string, options?: NavigationOptions): Promise<void> {
     await sendHttpCommand('navigate', { url, ...options });
     this._url = url;
+    // Track last known URL for reinit recovery
+    if (currentInstanceId) {
+      updateLastKnownUrl(currentInstanceId, url);
+    }
   }
 
   async goBack(options?: NavigationOptions): Promise<void> {
     await sendHttpCommand('back', options);
     const info = await this.getInfo();
     this._url = info.url;
+    // Track last known URL for reinit recovery
+    if (currentInstanceId) {
+      updateLastKnownUrl(currentInstanceId, this._url);
+    }
   }
 
   async goForward(options?: NavigationOptions): Promise<void> {
     await sendHttpCommand('forward', options);
     const info = await this.getInfo();
     this._url = info.url;
+    // Track last known URL for reinit recovery
+    if (currentInstanceId) {
+      updateLastKnownUrl(currentInstanceId, this._url);
+    }
   }
 
   async reload(options?: NavigationOptions): Promise<void> {
