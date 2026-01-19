@@ -8,6 +8,16 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as net from 'net';
 
+// Backend integration for stealth modes
+import {
+  BackendFactory,
+  BackendType,
+  adaptBackendInstance,
+  isAdaptedInstance,
+  type AdaptedBrowserInstance,
+} from './backends/index.js';
+import { getBackendSelector } from './detection/index.js';
+
 // Stealth plugin initialization moved to a single place to avoid double-registration
 // which was causing MCP server to stop responding
 let stealthInitialized = false;
@@ -24,6 +34,7 @@ export class BrowserManager {
   private config: ServerConfig;
   private cleanupTimer?: NodeJS.Timeout;
   private detectedProxy?: string;
+  private backendSelector = getBackendSelector();
 
   constructor(config: ServerConfig) {
     this.config = config;
@@ -163,22 +174,46 @@ export class BrowserManager {
     if (browserConfig?.proxy?.server) {
       return browserConfig.proxy.server;
     }
-    
+
     if (browserConfig?.proxy?.autoDetect === false) {
       return undefined; // Explicitly disable proxy
     }
-    
+
     return this.detectedProxy;
   }
 
   /**
+   * Select the appropriate backend based on URL and config
+   * @param url Target URL (used for auto-detection)
+   * @param explicitBackend Explicitly requested backend type
+   */
+  private selectBackend(url?: string, explicitBackend?: BackendType | 'auto'): BackendType {
+    // Explicit backend takes priority
+    if (explicitBackend && explicitBackend !== 'auto') {
+      return explicitBackend;
+    }
+
+    // Auto-select based on URL
+    if (url) {
+      return this.backendSelector.selectBackend(url);
+    }
+
+    // Default to playwright
+    return 'playwright';
+  }
+
+  /**
    * Create a new browser instance
-   * Supports two modes:
-   * 1. Normal mode: launches fresh browser with optional storageState
-   * 2. Persistent mode: uses userDataDir for full Chrome profile persistence
+   * Supports multiple backends:
+   * - playwright: Default, full features
+   * - camoufox: Firefox-based stealth for Cloudflare bypass
+   * - seleniumbase: Chrome UC mode for Cloudflare bypass
+   *
+   * Backend is auto-selected based on URL (Cloudflare sites use stealth)
+   * or can be explicitly set via browserConfig.backend
    */
   async createInstance(
-    browserConfig?: Partial<BrowserConfig>,
+    browserConfig?: Partial<BrowserConfig> & { backend?: BackendType | 'auto'; url?: string },
     metadata?: BrowserInstance['metadata']
   ): Promise<ToolResult> {
     try {
@@ -192,6 +227,16 @@ export class BrowserManager {
       const config = { ...this.config.defaultBrowserConfig, ...browserConfig };
       const effectiveProxy = this.getEffectiveProxy(browserConfig);
 
+      // Determine which backend to use
+      const backendType = this.selectBackend(browserConfig?.url, browserConfig?.backend);
+      console.error(`[BrowserManager] Using backend: ${backendType}`);
+
+      // For stealth backends (camoufox, seleniumbase), use BackendFactory
+      if (backendType !== 'playwright') {
+        return await this.createWithBackend(backendType, config, effectiveProxy, metadata);
+      }
+
+      // For playwright, use existing implementation (faster, more features)
       let browser: Browser;
       let context: any;
       let page: any;
@@ -272,6 +317,7 @@ export class BrowserManager {
         data: {
           instanceId,
           browserType: config.browserType,
+          backend: 'playwright',
           headless: config.headless,
           viewport: config.viewport,
           proxy: effectiveProxy,
@@ -284,6 +330,70 @@ export class BrowserManager {
         success: false,
         error: `Failed to create browser instance: ${error instanceof Error ? error.message : error}`
       };
+    }
+  }
+
+  /**
+   * Create instance using a stealth backend (camoufox or seleniumbase)
+   */
+  private async createWithBackend(
+    backendType: BackendType,
+    config: BrowserConfig & { url?: string },
+    proxy?: string,
+    metadata?: BrowserInstance['metadata']
+  ): Promise<ToolResult> {
+    try {
+      // Get the backend (lazy-loaded)
+      const backend = await BackendFactory.getAsync(backendType);
+
+      // Check availability
+      const available = await backend.isAvailable();
+      if (!available) {
+        console.error(`[BrowserManager] Backend ${backendType} not available, falling back to playwright`);
+        return this.createInstance({ ...config, backend: 'playwright' }, metadata);
+      }
+
+      // Create the backend instance
+      const result = await backend.create({
+        url: config.url,
+        headless: config.headless,
+        profileDir: config.userDataDir,
+        viewport: config.viewport,
+        proxy: proxy,
+        channel: config.channel,
+        browserType: config.browserType,
+      });
+
+      if (!result.success || !result.data) {
+        return {
+          success: false,
+          error: result.error || `Failed to create ${backendType} instance`
+        };
+      }
+
+      // Adapt to legacy BrowserInstance format
+      const adaptedInstance = adaptBackendInstance(result.data, backend);
+      adaptedInstance.metadata = metadata;
+
+      this.instances.set(adaptedInstance.id, adaptedInstance);
+
+      return {
+        success: true,
+        data: {
+          instanceId: adaptedInstance.id,
+          browserType: config.browserType || 'chromium',
+          backend: backendType,
+          headless: config.headless,
+          viewport: config.viewport,
+          proxy: proxy,
+          metadata
+        },
+        instanceId: adaptedInstance.id
+      };
+    } catch (error) {
+      console.error(`[BrowserManager] Backend ${backendType} failed: ${error}`);
+      // Fallback to playwright on error
+      return this.createInstance({ ...config, backend: 'playwright' }, metadata);
     }
   }
 
@@ -305,6 +415,7 @@ export class BrowserManager {
     const instanceList = Array.from(this.instances.values()).map(instance => ({
       id: instance.id,
       isActive: instance.isActive,
+      backend: isAdaptedInstance(instance) ? (instance as AdaptedBrowserInstance).backendType : 'playwright',
       createdAt: instance.createdAt.toISOString(),
       lastUsed: instance.lastUsed.toISOString(),
       metadata: instance.metadata,
@@ -334,7 +445,16 @@ export class BrowserManager {
         };
       }
 
-      await instance.browser.close();
+      // For adapted instances, use the backend's close method
+      if (isAdaptedInstance(instance)) {
+        const adaptedInstance = instance as AdaptedBrowserInstance;
+        await adaptedInstance.backend.close(adaptedInstance.backendInstance);
+        console.error(`[BrowserManager] Closed ${adaptedInstance.backendType} instance ${instanceId}`);
+      } else {
+        // Standard Playwright instance
+        await instance.browser.close();
+      }
+
       this.instances.delete(instanceId);
 
       return {
@@ -395,10 +515,15 @@ export class BrowserManager {
    */
   async closeAllInstances(): Promise<ToolResult> {
     try {
-      const closePromises = Array.from(this.instances.values()).map(
-        instance => instance.browser.close()
-      );
-      
+      const closePromises = Array.from(this.instances.values()).map(async (instance) => {
+        if (isAdaptedInstance(instance)) {
+          const adaptedInstance = instance as AdaptedBrowserInstance;
+          await adaptedInstance.backend.close(adaptedInstance.backendInstance);
+        } else {
+          await instance.browser.close();
+        }
+      });
+
       await Promise.all(closePromises);
       const closedCount = this.instances.size;
       this.instances.clear();

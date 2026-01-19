@@ -502,6 +502,13 @@ Returns id to use with other browser_* tools.`,
               type: 'boolean',
               description: 'Enable network request/response monitoring. Use browser_get_network_logs to retrieve.',
               default: false
+            },
+            // Backend selection (isolated mode only)
+            backend: {
+              type: 'string',
+              enum: ['auto', 'playwright', 'camoufox', 'seleniumbase'],
+              description: 'Browser backend (isolated mode only). "auto" selects based on URL (camoufox for Cloudflare sites). "playwright" for full features, "camoufox" for Firefox stealth, "seleniumbase" for Chrome UC.',
+              default: 'auto'
             }
           }
         },
@@ -510,6 +517,7 @@ Returns id to use with other browser_* tools.`,
           properties: {
             id: { type: 'string', description: 'Unique identifier - use this as instanceId in other tools' },
             mode: { type: 'string', description: 'Browser mode: persistent/incognito/isolated' },
+            backend: { type: 'string', description: 'Backend used: playwright/camoufox/seleniumbase (isolated mode)' },
             url: { type: 'string' },
             browserType: { type: 'string', description: 'Browser engine (isolated mode only)' },
             protectionLevel: { type: 'number', description: 'Current protection level 0-3 (persistent/incognito modes)' },
@@ -2088,7 +2096,10 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 headless: args.headless ?? false, // Default false for better anti-detection
                 viewport,
                 userAgent,
-                storageStatePath: args.storageStatePath
+                storageStatePath: args.storageStatePath,
+                // Backend selection: pass URL for auto-detection, or explicit backend
+                url: args.url,
+                backend: args.backend || 'auto',
               },
               args.metadata
             );
@@ -2122,6 +2133,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               result.data = {
                 id: result.data.instanceId,
                 mode: 'isolated',
+                backend: result.data.backend || 'playwright',
                 browserType: result.data.browserType,
                 createdAt: result.data.createdAt
               };

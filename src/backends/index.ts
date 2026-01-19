@@ -21,3 +21,12 @@ export {
   type UnifiedInstance,
   type FallbackConfig,
 } from './unified-backend.js';
+
+// Page adapter for legacy compatibility
+export {
+  adaptBackendInstance,
+  adaptBackendPage,
+  isAdaptedInstance,
+  getInstanceBackend,
+  type AdaptedBrowserInstance,
+} from './page-adapter.js';

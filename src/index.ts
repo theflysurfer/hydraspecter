@@ -43,6 +43,9 @@ program
   .option('--global-channel <channel>', 'Browser channel for global profile: chrome, msedge')
   .option('--groups <groups>', `Tool groups to enable (comma-separated). Available: ${ALL_GROUPS.join(', ')}, all. Default: all`, 'all')
   .option('--meta', 'Enable meta-tool mode: single unified "browser" tool (~2k tokens vs ~31k). Zero-config recommended.', false)
+  // Stealth backend options
+  .option('--backend <type>', 'Default backend: auto, playwright, camoufox, seleniumbase. "auto" selects based on URL.', 'auto')
+  .option('--no-backend-fallback', 'Disable automatic fallback to playwright when stealth backend fails')
   .action(async (options) => {
     // Build configuration
     // Determine viewport: null for natural, or specified dimensions

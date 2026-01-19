@@ -30,9 +30,9 @@ describe('BrowserTools', () => {
       expect(tools.length).toBeGreaterThan(0);
     });
 
-    it('should include browser_create_instance tool', () => {
+    it('should include browser_create tool', () => {
       const tools = browserTools.getTools();
-      const createTool = tools.find(t => t.name === 'browser_create_instance');
+      const createTool = tools.find(t => t.name === 'browser_create');
       expect(createTool).toBeDefined();
       expect(createTool?.inputSchema).toBeDefined();
       expect(createTool?.outputSchema).toBeDefined();
