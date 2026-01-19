@@ -476,8 +476,14 @@ Sessions persist across all pools. Just use direct workspace URLs:
         break;
 
       case 'browser_evaluate':
+        // Support multiple ways to specify the script
         if (target) result['script'] = target;
         if (text) result['script'] = text;
+        // Also accept 'expression' as an alias for 'script' (common alternative name)
+        if (options['expression'] && !result['script']) {
+          result['script'] = options['expression'];
+          delete result['expression']; // Clean up to avoid passing both
+        }
         break;
 
       case 'browser_set_protection_level':

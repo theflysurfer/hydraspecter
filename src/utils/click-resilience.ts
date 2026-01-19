@@ -63,7 +63,7 @@ export const DEFAULT_RESILIENCE: ResilienceOptions = {
   maxRetries: 3,
   retryDelay: 500,
   dismissOverlays: true,
-  timeout: 30000
+  timeout: 15000  // Reduced from 30s to avoid MCP 60s timeout with retries
 };
 
 // Known dismissible overlays
@@ -215,14 +215,24 @@ export async function dismissKnownOverlays(page: Page): Promise<boolean> {
  */
 export async function getPositionFallback(
   page: Page,
-  selector: string
+  selector: string,
+  index?: number
 ): Promise<{ x: number; y: number } | null> {
   try {
-    const coords = await page.evaluate((sel: string) => {
-      // Try querySelector first
-      let el: Element | null = document.querySelector(sel);
+    const coords = await page.evaluate(({ sel, idx }: { sel: string; idx?: number }) => {
+      // Try querySelectorAll to handle index
+      const elements = document.querySelectorAll(sel);
+      let el: Element | null = null;
 
-      // If not found, try text-based search for common patterns
+      if (elements.length > 0) {
+        // Use index if provided, otherwise first element
+        const targetIndex = idx !== undefined ? idx : 0;
+        if (targetIndex < elements.length) {
+          el = elements[targetIndex] || null;
+        }
+      }
+
+      // If not found with CSS selector, try text-based search for common patterns
       if (!el && sel.includes(':has-text(')) {
         const textMatch = sel.match(/:has-text\(["'](.+?)["']\)/);
         if (textMatch && textMatch[1]) {
@@ -230,13 +240,14 @@ export async function getPositionFallback(
           const tagMatch = sel.match(/^(\w+)/);
           const tag = tagMatch && tagMatch[1] ? tagMatch[1] : '*';
 
-          // Find element containing text
-          const elements = Array.from(document.querySelectorAll(tag));
-          for (const element of elements) {
-            if (element.textContent?.includes(searchText)) {
-              el = element;
-              break;
-            }
+          // Find all elements containing text
+          const matchingElements = Array.from(document.querySelectorAll(tag))
+            .filter(element => element.textContent?.includes(searchText));
+
+          // Use index if provided, otherwise first element
+          const targetIndex = idx !== undefined ? idx : 0;
+          if (targetIndex < matchingElements.length) {
+            el = matchingElements[targetIndex] || null;
           }
         }
       }
@@ -251,7 +262,7 @@ export async function getPositionFallback(
         x: rect.x + rect.width / 2,
         y: rect.y + rect.height / 2
       };
-    }, selector);
+    }, { sel: selector, idx: index });
 
     return coords;
   } catch {
@@ -303,6 +314,7 @@ export async function resilientClick(
     clickCount?: number;
     delay?: number;
     timeout?: number;
+    index?: number;  // Index for multiple elements (passed to position fallback)
   },
   resilienceOptions: ResilienceOptions
 ): Promise<ResilientClickResult> {
@@ -393,8 +405,8 @@ export async function resilientClick(
 
         case 'timeout':
           if (resilienceOptions.positionFallback) {
-            // Try to get position and click by coordinates
-            const pos = await getPositionFallback(page, selector);
+            // Try to get position and click by coordinates (pass index for multiple elements)
+            const pos = await getPositionFallback(page, selector, clickOptions.index);
             if (pos) {
               try {
                 await page.mouse.click(pos.x, pos.y, {

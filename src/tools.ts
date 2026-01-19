@@ -504,11 +504,11 @@ Returns id to use with other browser_* tools.`,
               description: 'Enable network request/response monitoring. Use browser_get_network_logs to retrieve.',
               default: false
             },
-            // Backend selection (isolated mode only)
+            // Backend selection (all modes - stealth backends persist sessions too)
             backend: {
               type: 'string',
               enum: ['auto', 'playwright', 'camoufox', 'seleniumbase'],
-              description: 'Browser backend (isolated mode only). "auto" selects based on URL (camoufox for Cloudflare sites). "playwright" for full features, "camoufox" for Firefox stealth, "seleniumbase" for Chrome UC.',
+              description: 'Browser backend. "auto" uses playwright (default). "camoufox" for Firefox stealth (Cloudflare bypass), "seleniumbase" for Chrome UC (anti-bot sites). Sessions persist for all backends.',
               default: 'auto'
             },
             // Async mode for slow backends (camoufox, seleniumbase)
@@ -2137,7 +2137,17 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             }
           }
 
-          if (mode === 'isolated') {
+          // Check if a stealth backend is requested
+          const requestedBackend = args.backend || 'auto';
+          const stealthBackends = ['camoufox', 'seleniumbase'];
+          const needsStealthBackend = stealthBackends.includes(requestedBackend);
+
+          // Use browserManager for isolated mode OR when a stealth backend is explicitly requested
+          if (mode === 'isolated' || needsStealthBackend) {
+            // Log when stealth backend forces browserManager path
+            if (needsStealthBackend && mode !== 'isolated') {
+              console.error(`[STEALTH] Backend ${requestedBackend} requested with mode=${mode}, using browserManager with session persistence`);
+            }
             // Isolated mode: use BrowserManager (separate instance)
             let viewport = args.viewport || { width: 1280, height: 720 };
             let userAgent = args.userAgent;
@@ -2150,10 +2160,8 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               }
             }
 
-            const requestedBackend = args.backend || 'auto';
             // Slow backends that benefit from async mode to avoid MCP timeout
-            const slowBackends = ['camoufox', 'seleniumbase'];
-            const isSlowBackend = slowBackends.includes(requestedBackend);
+            const isSlowBackend = stealthBackends.includes(requestedBackend);
             // Auto-enable async for slow backends unless explicitly disabled
             const useAsync = args.async === true || (args.async !== false && isSlowBackend);
 
@@ -2228,7 +2236,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 success: true,
                 data: {
                   id: `job:${job.id}`, // Prefix to indicate this is a job, not an instance
-                  mode: 'isolated',
+                  mode: mode,
                   backend: requestedBackend,
                   jobId: job.id,
                   status: job.status,
@@ -2280,7 +2288,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               if (result.success && result.data) {
                 result.data = {
                   id: result.data.instanceId,
-                  mode: 'isolated',
+                  mode: mode,
                   backend: result.data.backend || 'playwright',
                   browserType: result.data.browserType,
                   createdAt: result.data.createdAt
@@ -3644,7 +3652,14 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           success: false,
           error: `No elements found for selector: ${selector}`,
           instanceId,
-          data: { suggestion: 'Use browser_snapshot to verify element exists, or browser_evaluate to find by textContent' }
+          data: {
+            suggestion: 'ARIA snapshots show accessibility roles, not DOM structure. Use simpler selectors like button:has-text("text") without parent combinators. Or use browser_evaluate to find element coordinates.',
+            tips: [
+              'ARIA "main" = role="main" or <main>, not just a CSS tag selector',
+              'Try: button:has-text("Enable") instead of: main button:has-text("Enable")',
+              'Use position: { x, y } for complex element targeting'
+            ]
+          }
         };
       }
 
@@ -3727,7 +3742,8 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           button: options.button,
           clickCount: options.clickCount,
           delay: options.delay,
-          timeout: options.timeout
+          timeout: options.timeout,
+          index: options.index  // Pass index for position fallback
         },
         resilienceOptions
       );
@@ -4163,6 +4179,15 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
   }
 
   private async evaluate(instanceId: string, script: string): Promise<ToolResult> {
+    // Validate script parameter
+    if (!script || typeof script !== 'string') {
+      return {
+        success: false,
+        error: 'Script parameter is required. Use "script" property or "expression" in options.',
+        data: { suggestion: 'browser({ action: "evaluate", pageId: "...", options: { script: "document.title" } })' }
+      };
+    }
+
     const pageResult = this.getPageFromId(instanceId);
     if (!pageResult) {
       return { success: false, error: `Instance/Page ${instanceId} not found` };
