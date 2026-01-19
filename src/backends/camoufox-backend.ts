@@ -11,9 +11,21 @@
  * - Human-like cursor movement
  */
 
-import { Camoufox } from 'camoufox';
-import type { LaunchOptions } from 'camoufox';
+// Dynamic import to avoid ESM issues - camoufox is loaded only when needed
+// import { Camoufox } from 'camoufox';
+// import type { LaunchOptions } from 'camoufox';
 import { v4 as uuidv4 } from 'uuid';
+
+// Lazy-loaded camoufox module
+let CamoufoxClass: any = null;
+
+async function loadCamoufox(): Promise<any> {
+  if (!CamoufoxClass) {
+    const module = await import('camoufox');
+    CamoufoxClass = module.Camoufox;
+  }
+  return CamoufoxClass;
+}
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -66,7 +78,7 @@ export class CamoufoxBackend implements IBrowserBackend {
   async isAvailable(): Promise<boolean> {
     try {
       // Check if camoufox is importable
-      const { Camoufox } = await import('camoufox');
+      const Camoufox = await loadCamoufox();
       return typeof Camoufox === 'function';
     } catch {
       return false;
@@ -89,8 +101,8 @@ export class CamoufoxBackend implements IBrowserBackend {
         fs.mkdirSync(profileDir, { recursive: true });
       }
 
-      // Camoufox launch options
-      const launchOptions: LaunchOptions = {
+      // Camoufox launch options (using any since LaunchOptions is from dynamic import)
+      const launchOptions: any = {
         // Persistence via data_dir
         data_dir: profileDir,
 
@@ -122,6 +134,7 @@ export class CamoufoxBackend implements IBrowserBackend {
       };
 
       // Launch Camoufox - returns Browser or BrowserContext
+      const Camoufox = await loadCamoufox();
       const result = await Camoufox(launchOptions);
 
       // Handle both Browser and BrowserContext return types
