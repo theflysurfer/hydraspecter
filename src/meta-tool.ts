@@ -462,13 +462,18 @@ Sessions persist across all pools. Just use direct workspace URLs:
 
       case 'browser_click':
       case 'browser_type':
-      case 'browser_fill':
-      case 'browser_select_option':
       case 'browser_get_element_text':
       case 'browser_get_element_attribute':
       case 'browser_wait_for_element':
         if (target) result['selector'] = target;
         if (text) result['text'] = text;
+        break;
+
+      case 'browser_fill':
+      case 'browser_select_option':
+        // These actions expect 'value' not 'text' for the content to fill
+        if (target) result['selector'] = target;
+        if (text) result['value'] = text;  // Map text -> value for fill/select
         break;
 
       case 'browser_create':

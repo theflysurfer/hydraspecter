@@ -66,6 +66,20 @@ import { getJobManager } from './job-manager.js';
  * - :first → :first-child
  * - :last → :last-child
  */
+/**
+ * Extract nth index from selector if present (e.g., "button >> nth=1" → { selector: "button", index: 1 })
+ */
+function extractNthFromSelector(selector: string): { selector: string; index?: number } {
+  const nthMatch = selector.match(/\s*>>\s*nth=(\d+)\s*$/);
+  if (nthMatch && nthMatch[1]) {
+    return {
+      selector: selector.replace(/\s*>>\s*nth=\d+\s*$/, '').trim(),
+      index: parseInt(nthMatch[1], 10)
+    };
+  }
+  return { selector };
+}
+
 function normalizeSelector(selector: string): string {
   if (!selector) return selector;
 
@@ -3581,8 +3595,13 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         return { success: false, error: 'Either selector or position must be provided' };
       }
 
+      // Extract >> nth=N from selector (e.g., "button >> nth=1")
+      const { selector: cleanSelector, index: selectorIndex } = extractNthFromSelector(selector);
+      // options.index takes precedence over selector-embedded index
+      const effectiveIndex = typeof options.index === 'number' ? options.index : selectorIndex;
+
       // Normalize jQuery-style selectors to Playwright format
-      const normalizedSelector = normalizeSelector(selector);
+      const normalizedSelector = normalizeSelector(cleanSelector);
 
       // Check if humanize should be enabled (supports "auto" mode with detection)
       const useHumanize = await this.shouldHumanizeAsync(pageResult.page, 'mouse', options.humanize);
@@ -3591,8 +3610,8 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
       if (options.frame) {
         const frameLocator = pageResult.page.frameLocator(options.frame);
         let locator = frameLocator.locator(normalizedSelector);
-        if (typeof options.index === 'number') {
-          locator = locator.nth(options.index);
+        if (typeof effectiveIndex === 'number') {
+          locator = locator.nth(effectiveIndex);
         }
 
         const clickOptions: any = { button: options.button };
@@ -3604,15 +3623,15 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         await locator.click(clickOptions);
         return {
           success: true,
-          data: { selector, clicked: true, frame: options.frame, index: options.index },
+          data: { selector, clicked: true, frame: options.frame, index: effectiveIndex },
           instanceId
         };
       }
 
       // Build locator with optional index for multiple elements
       let locator = pageResult.page.locator(normalizedSelector);
-      if (typeof options.index === 'number') {
-        locator = locator.nth(options.index);
+      if (typeof effectiveIndex === 'number') {
+        locator = locator.nth(effectiveIndex);
       }
 
       // Check element count and provide helpful error for strict mode violations
@@ -3622,7 +3641,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         const shouldTryFallback = options.positionFallback ?? DEFAULT_RESILIENCE.positionFallback;
         if (shouldTryFallback) {
           const { getPositionFallback } = await import('./utils/click-resilience.js');
-          const pos = await getPositionFallback(pageResult.page, selector);
+          const pos = await getPositionFallback(pageResult.page, cleanSelector, effectiveIndex);
           if (pos) {
             const useHumanizeForFallback = await this.shouldHumanizeAsync(pageResult.page, 'mouse', options.humanize);
             if (useHumanizeForFallback) {
@@ -3648,27 +3667,46 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             };
           }
         }
+        // Build helpful error based on selector type
+        const tips: string[] = [];
+        if (cleanSelector.includes(':has-text(')) {
+          if (cleanSelector.startsWith('button')) {
+            tips.push('Try: [role="button"]:has-text("text") - many sites use role="button" instead of <button>');
+            tips.push('Or use Playwright role selector: role=button[name="text"]');
+          }
+          tips.push('ARIA snapshots show accessibility roles, not HTML tags');
+        }
+        tips.push('Use position: { x, y } for cross-origin iframes or complex elements');
+        tips.push('Use browser_evaluate to find element coordinates dynamically');
+
         return {
           success: false,
           error: `No elements found for selector: ${selector}`,
           instanceId,
           data: {
-            suggestion: 'ARIA snapshots show accessibility roles, not DOM structure. Use simpler selectors like button:has-text("text") without parent combinators. Or use browser_evaluate to find element coordinates.',
-            tips: [
-              'ARIA "main" = role="main" or <main>, not just a CSS tag selector',
-              'Try: button:has-text("Enable") instead of: main button:has-text("Enable")',
-              'Use position: { x, y } for complex element targeting'
-            ]
+            suggestion: 'Element might use role= instead of HTML tag. Try role-based selectors or position fallback.',
+            tips,
+            alternatives: cleanSelector.startsWith('button') ? [
+              `[role="button"]:has-text("${cleanSelector.match(/:has-text\(["'](.+?)["']\)/)?.[1] || 'text'}")`,
+              `text=${cleanSelector.match(/:has-text\(["'](.+?)["']\)/)?.[1] || 'text'}`
+            ] : undefined
           }
         };
       }
 
-      if (elementCount > 1 && typeof options.index !== 'number') {
+      if (elementCount > 1 && typeof effectiveIndex !== 'number') {
         return {
           success: false,
-          error: `Strict mode violation: selector "${selector}" resolved to ${elementCount} elements. Use 'index' parameter (0-${elementCount - 1}) to select one, or make selector more specific.`,
+          error: `Strict mode violation: selector "${selector}" resolved to ${elementCount} elements. Use 'index' parameter (0-${elementCount - 1}) to select one, or use >> nth=N syntax.`,
           instanceId,
-          data: { elementCount, suggestion: 'Add index: 0 for first element, or use a more specific selector' }
+          data: {
+            elementCount,
+            suggestion: 'Add options.index: 0 for first element, or use selector >> nth=0',
+            examples: [
+              `{ "options": { "index": 0 } }`,
+              `{ "target": "${cleanSelector} >> nth=0" }`
+            ]
+          }
         };
       }
 
@@ -3697,7 +3735,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           await locator.click({ force: options.force || false });
           return {
             success: true,
-            data: { selector, clicked: true, humanized: true, autoDetected: options.humanize === 'auto', index: options.index },
+            data: { selector, clicked: true, humanized: true, autoDetected: options.humanize === 'auto', index: effectiveIndex },
             instanceId
           };
         }
@@ -3712,7 +3750,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         await locator.click(clickOptions);
         return {
           success: true,
-          data: { selector, clicked: true, index: options.index },
+          data: { selector, clicked: true, index: effectiveIndex },
           instanceId
         };
       }
@@ -3736,14 +3774,14 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
       const result = await resilientClick(
         pageResult.page,
         locator,
-        selector,
+        cleanSelector,  // Use clean selector without >> nth=N for fallback
         {
           force: options.force,
           button: options.button,
           clickCount: options.clickCount,
           delay: options.delay,
           timeout: options.timeout,
-          index: options.index  // Pass index for position fallback
+          index: effectiveIndex  // Pass effective index for position fallback
         },
         resilienceOptions
       );
@@ -3756,7 +3794,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             clicked: true,
             humanized: useHumanize,
             autoDetected: options.humanize === 'auto',
-            index: options.index,
+            index: effectiveIndex,
             attempts: result.attempts.length,
             recoveryApplied: result.recoveryApplied.length > 0 ? result.recoveryApplied : undefined,
             fallbackUsed: result.recoveryApplied.includes('position_fallback'),

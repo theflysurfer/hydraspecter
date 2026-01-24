@@ -240,9 +240,31 @@ export async function getPositionFallback(
           const tagMatch = sel.match(/^(\w+)/);
           const tag = tagMatch && tagMatch[1] ? tagMatch[1] : '*';
 
-          // Find all elements containing text
-          const matchingElements = Array.from(document.querySelectorAll(tag))
+          // Map HTML tags to their role equivalents (ARIA snapshot shows roles, not tags)
+          const roleMap: Record<string, string> = {
+            'button': 'button',
+            'a': 'link',
+            'input': 'textbox',
+            'select': 'combobox',
+            'nav': 'navigation',
+            'main': 'main',
+            'header': 'banner',
+            'footer': 'contentinfo'
+          };
+
+          // Find elements by tag OR role containing the text
+          let matchingElements: Element[] = [];
+
+          // First try exact tag match
+          matchingElements = Array.from(document.querySelectorAll(tag))
             .filter(element => element.textContent?.includes(searchText));
+
+          // If no matches and there's a role equivalent, also try role selector
+          if (matchingElements.length === 0 && roleMap[tag.toLowerCase()]) {
+            const role = roleMap[tag.toLowerCase()];
+            matchingElements = Array.from(document.querySelectorAll(`[role="${role}"]`))
+              .filter(element => element.textContent?.includes(searchText));
+          }
 
           // Use index if provided, otherwise first element
           const targetIndex = idx !== undefined ? idx : 0;
