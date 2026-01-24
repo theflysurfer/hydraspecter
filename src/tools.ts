@@ -112,6 +112,83 @@ function normalizeSelector(selector: string): string {
   return normalized;
 }
 
+/**
+ * Generate fallback selectors when tag[attr] pattern fails.
+ *
+ * Problem: ARIA snapshots show "button 'text'" but the element is often
+ * <div role="button" aria-label="text"> not <button>
+ *
+ * When button[aria-label="text"] fails, try:
+ * 1. [aria-label="text"] (remove tag, let attr match any element)
+ * 2. [role="button"][aria-label="text"] (use role instead of tag)
+ *
+ * @param selector Original selector that failed
+ * @returns Array of fallback selectors to try (empty if not applicable)
+ */
+function generateTagAttrFallbacks(selector: string): string[] {
+  // Match patterns like: tag[attr="value"] or tag[attr='value'] or tag[attr]
+  // Examples: button[aria-label="Save"], a[href="/home"], div[data-testid]
+  const tagAttrMatch = selector.match(/^([a-z][a-z0-9]*)\[([^\]]+)\]$/i);
+
+  if (!tagAttrMatch || !tagAttrMatch[1] || !tagAttrMatch[2]) {
+    return [];
+  }
+
+  const tag = tagAttrMatch[1];
+  const attrPart = tagAttrMatch[2];
+
+  // Don't generate fallbacks for generic tags that are usually correct
+  const genericTags = ['div', 'span', 'section', 'article', 'main', 'nav', 'aside', 'header', 'footer'];
+  if (genericTags.includes(tag.toLowerCase())) {
+    return [];
+  }
+
+  const fallbacks: string[] = [];
+
+  // Fallback 1: Remove tag, keep attribute (most likely to work)
+  // button[aria-label="text"] → [aria-label="text"]
+  fallbacks.push(`[${attrPart}]`);
+
+  // Fallback 2: Use role instead of tag
+  // button[aria-label="text"] → [role="button"][aria-label="text"]
+  // Only for tags that have standard role mappings
+  const roleMap: Record<string, string> = {
+    'button': 'button',
+    'a': 'link',
+    'input': 'textbox',
+    'select': 'combobox',
+    'img': 'img',
+    'table': 'table',
+    'form': 'form',
+    'dialog': 'dialog',
+    'menu': 'menu',
+    'menuitem': 'menuitem',
+    'tab': 'tab',
+    'tabpanel': 'tabpanel',
+    'listbox': 'listbox',
+    'option': 'option',
+    'checkbox': 'checkbox',
+    'radio': 'radio',
+    'slider': 'slider',
+    'switch': 'switch',
+    'progressbar': 'progressbar',
+    'alert': 'alert',
+    'alertdialog': 'alertdialog',
+    'tooltip': 'tooltip',
+    'tree': 'tree',
+    'treeitem': 'treeitem',
+    'grid': 'grid',
+    'gridcell': 'gridcell',
+  };
+
+  const role = roleMap[tag.toLowerCase()];
+  if (role) {
+    fallbacks.push(`[role="${role}"][${attrPart}]`);
+  }
+
+  return fallbacks;
+}
+
 export class BrowserTools {
   private humanizeConfig: HumanizeConfig;
   private detectionMonitor: DetectionMonitor;
@@ -3635,9 +3712,36 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
       }
 
       // Check element count and provide helpful error for strict mode violations
-      const elementCount = await locator.count();
+      let elementCount = await locator.count();
+      let workingSelector = normalizedSelector;
+      let fallbacksAttempted: string[] = [];
+
+      // If no elements found, try tag[attr] fallbacks before position fallback
+      // This handles the common case where ARIA shows "button" but element is <div role="button">
       if (elementCount === 0) {
-        // Try position fallback before giving up (Playwright :has-text() often fails on SPAs)
+        const selectorFallbacks = generateTagAttrFallbacks(normalizedSelector);
+
+        for (const fallbackSelector of selectorFallbacks) {
+          fallbacksAttempted.push(fallbackSelector);
+          let fallbackLocator = pageResult.page.locator(fallbackSelector);
+          if (typeof effectiveIndex === 'number') {
+            fallbackLocator = fallbackLocator.nth(effectiveIndex);
+          }
+
+          const fallbackCount = await fallbackLocator.count();
+          if (fallbackCount > 0) {
+            // Found elements with fallback selector - use it
+            console.error(`[Selector Fallback] "${normalizedSelector}" → "${fallbackSelector}" (found ${fallbackCount} elements)`);
+            locator = fallbackLocator;
+            workingSelector = fallbackSelector;
+            elementCount = fallbackCount;
+            break;
+          }
+        }
+      }
+
+      // Still no elements? Try position fallback
+      if (elementCount === 0) {
         const shouldTryFallback = options.positionFallback ?? DEFAULT_RESILIENCE.positionFallback;
         if (shouldTryFallback) {
           const { getPositionFallback } = await import('./utils/click-resilience.js');
@@ -3661,14 +3765,19 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 position: pos,
                 fallbackUsed: true,
                 humanized: useHumanizeForFallback,
-                recoveryApplied: ['position_fallback']
+                recoveryApplied: ['position_fallback'],
+                selectorFallbacksAttempted: fallbacksAttempted.length > 0 ? fallbacksAttempted : undefined
               },
               instanceId
             };
           }
         }
-        // Build helpful error based on selector type
+
+        // All fallbacks failed - build helpful error
         const tips: string[] = [];
+        if (fallbacksAttempted.length > 0) {
+          tips.push(`Tried selector fallbacks: ${fallbacksAttempted.join(', ')}`);
+        }
         if (cleanSelector.includes(':has-text(')) {
           if (cleanSelector.startsWith('button')) {
             tips.push('Try: [role="button"]:has-text("text") - many sites use role="button" instead of <button>');
@@ -3686,6 +3795,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           data: {
             suggestion: 'Element might use role= instead of HTML tag. Try role-based selectors or position fallback.',
             tips,
+            selectorFallbacksAttempted: fallbacksAttempted.length > 0 ? fallbacksAttempted : undefined,
             alternatives: cleanSelector.startsWith('button') ? [
               `[role="button"]:has-text("${cleanSelector.match(/:has-text\(["'](.+?)["']\)/)?.[1] || 'text'}")`,
               `text=${cleanSelector.match(/:has-text\(["'](.+?)["']\)/)?.[1] || 'text'}`
@@ -3735,7 +3845,14 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           await locator.click({ force: options.force || false });
           return {
             success: true,
-            data: { selector, clicked: true, humanized: true, autoDetected: options.humanize === 'auto', index: effectiveIndex },
+            data: {
+              selector,
+              clicked: true,
+              humanized: true,
+              autoDetected: options.humanize === 'auto',
+              index: effectiveIndex,
+              selectorFallbackUsed: workingSelector !== normalizedSelector ? workingSelector : undefined
+            },
             instanceId
           };
         }
@@ -3750,7 +3867,12 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
         await locator.click(clickOptions);
         return {
           success: true,
-          data: { selector, clicked: true, index: effectiveIndex },
+          data: {
+            selector,
+            clicked: true,
+            index: effectiveIndex,
+            selectorFallbackUsed: workingSelector !== normalizedSelector ? workingSelector : undefined
+          },
           instanceId
         };
       }
@@ -3798,6 +3920,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             attempts: result.attempts.length,
             recoveryApplied: result.recoveryApplied.length > 0 ? result.recoveryApplied : undefined,
             fallbackUsed: result.recoveryApplied.includes('position_fallback'),
+            selectorFallbackUsed: workingSelector !== normalizedSelector ? workingSelector : undefined,
             ...result.data
           },
           instanceId
