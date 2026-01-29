@@ -73,6 +73,11 @@ const AUTH_REQUIRED_DOMAINS = new Set([
   // Messaging apps (QR code login, session-based)
   'web.whatsapp.com',
   'web.telegram.org',
+  // Home exchange (requires login)
+  'homeexchange.com',
+  'www.homeexchange.com',
+  'homeexchange.fr',
+  'www.homeexchange.fr',
 ]);
 
 /**

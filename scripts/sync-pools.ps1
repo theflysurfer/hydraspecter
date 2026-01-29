@@ -30,6 +30,11 @@ $SyncFiles = @(
     @{ Src = "Default\Preferences"; Required = $false }
 )
 
+# Directories to sync (Local Storage for Telegram, WhatsApp, etc.)
+$SyncDirs = @(
+    "Default\Local Storage"
+)
+
 $sourceDir = Join-Path $ProfilesDir "pool-$SourcePool"
 $sourceCookies = Join-Path $sourceDir "Default\Network\Cookies"
 
@@ -72,8 +77,23 @@ foreach ($i in $TargetPools) {
             $fileCount++
         }
 
+        # Sync directories (Local Storage for Telegram, WhatsApp, etc.)
+        foreach ($dir in $SyncDirs) {
+            $srcDir = Join-Path $sourceDir $dir
+            $destDir = Join-Path $targetDir $dir
+
+            if (Test-Path $srcDir) {
+                # Remove existing and copy fresh
+                if (Test-Path $destDir) {
+                    Remove-Item -Path $destDir -Recurse -Force -ErrorAction SilentlyContinue
+                }
+                Copy-Item -Path $srcDir -Destination $destDir -Recurse -Force
+                $fileCount++
+            }
+        }
+
         $size = [math]::Round((Get-Item (Join-Path $targetDir "Default\Network\Cookies")).Length / 1KB)
-        Write-Host "  OK pool-$i ($size KB, $fileCount files)" -ForegroundColor Green
+        Write-Host "  OK pool-$i ($size KB, $fileCount files/dirs)" -ForegroundColor Green
         $synced++
     } catch {
         $errMsg = $_.Exception.Message
