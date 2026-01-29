@@ -37,7 +37,7 @@ document.querySelectorAll('.tab').forEach(tab => {
   });
 });
 
-function matchUrl(url, pattern) {
+function matchUrlPattern(url, pattern) {
   if (!url || !pattern) return false;
   const escaped = pattern
     .replace(/[.+^${}()|[\]\\]/g, '\\$&')
@@ -48,6 +48,16 @@ function matchUrl(url, pattern) {
   } catch {
     return false;
   }
+}
+
+function matchUrl(url, pattern, excludePatterns = []) {
+  if (!matchUrlPattern(url, pattern)) return false;
+  if (excludePatterns && excludePatterns.length > 0) {
+    for (const excludePattern of excludePatterns) {
+      if (matchUrlPattern(url, excludePattern)) return false;
+    }
+  }
+  return true;
 }
 
 function formatTime(timestamp) {
@@ -76,15 +86,43 @@ function renderRules(rules, currentUrl) {
     return;
   }
   rulesListEl.innerHTML = matchingRules.map(rule => `
-    <div class="rule">
+    <div class="rule ${rule.enabled ? '' : 'disabled'}" data-rule-id="${escapeHtml(rule.id)}">
       <div class="rule-icon"></div>
       <div class="rule-info">
         <div class="rule-name">${escapeHtml(rule.name)}</div>
         <div class="rule-pattern">${escapeHtml(rule.urlPattern)}</div>
       </div>
       <div class="rule-badge">${rule.css ? 'CSS' : ''}${rule.css && rule.js ? '+' : ''}${rule.js ? 'JS' : ''}</div>
+      <label class="rule-toggle">
+        <input type="checkbox" ${rule.enabled ? 'checked' : ''} data-rule-id="${escapeHtml(rule.id)}">
+        <span class="slider"></span>
+      </label>
     </div>
   `).join('');
+
+  // Add toggle event listeners
+  rulesListEl.querySelectorAll('.rule-toggle input').forEach(toggle => {
+    toggle.addEventListener('change', async (e) => {
+      const ruleId = e.target.dataset.ruleId;
+      const enabled = e.target.checked;
+      await toggleRule(ruleId, enabled);
+    });
+  });
+}
+
+async function toggleRule(ruleId, enabled) {
+  try {
+    const result = await chrome.runtime.sendMessage({
+      action: 'toggleRule',
+      ruleId,
+      enabled
+    });
+    if (result.success) {
+      await updateUI();
+    }
+  } catch (error) {
+    console.error('Failed to toggle rule:', error);
+  }
 }
 
 async function updateUI() {
@@ -95,7 +133,7 @@ async function updateUI() {
 
   const { rules = [], lastSync } = await chrome.storage.local.get(['rules', 'lastSync']);
   totalRulesEl.textContent = rules.length;
-  const matchingRules = rules.filter(r => matchUrl(currentUrl, r.urlPattern));
+  const matchingRules = rules.filter(r => matchUrl(currentUrl, r.urlPattern, r.excludePatterns));
   activeRulesEl.textContent = matchingRules.filter(r => r.enabled).length;
   renderRules(rules, currentUrl);
   lastSyncEl.textContent = `Sync: ${formatTime(lastSync)}`;

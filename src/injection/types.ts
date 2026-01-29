@@ -22,6 +22,9 @@ export interface InjectionRule {
   /** URL pattern to match (glob style: *://example.com/*) */
   urlPattern: string;
 
+  /** URL patterns to exclude (glob style, e.g., "*://maps.google.com/*") */
+  excludePatterns?: string[];
+
   /** Whether the rule is enabled */
   enabled: boolean;
 
@@ -70,6 +73,7 @@ export interface InjectionRulesConfig {
 export interface CreateRuleInput {
   name: string;
   urlPattern: string;
+  excludePatterns?: string[];
   css?: string;
   cssFile?: string;
   js?: string;

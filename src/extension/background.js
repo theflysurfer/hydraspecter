@@ -219,8 +219,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       log('debug', `getMatchingRules: ${rules.length} total rules, URL: ${message.url}`);
 
       const matching = rules.filter(rule => {
-        const matches = matchUrl(message.url, rule.urlPattern);
-        log('debug', `  Rule "${rule.name}" pattern="${rule.urlPattern}" matches=${matches}`);
+        const matches = matchUrl(message.url, rule.urlPattern, rule.excludePatterns);
+        log('debug', `  Rule "${rule.name}" pattern="${rule.urlPattern}" excludes=${rule.excludePatterns?.length || 0} matches=${matches}`);
         return matches;
       });
 
@@ -238,6 +238,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'updateBadge') {
     updateBadge(sender.tab?.id, message.count);
     sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.action === 'toggleRule') {
+    toggleRuleEnabled(message.ruleId, message.enabled).then(sendResponse);
     return true;
   }
 
@@ -265,6 +270,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 /**
+ * Toggle rule enabled state in local storage
+ * Note: This only affects local state, not the source file
+ */
+async function toggleRuleEnabled(ruleId, enabled) {
+  log('debug', `Toggling rule ${ruleId} to ${enabled}`);
+
+  try {
+    const { rules = [] } = await chrome.storage.local.get(['rules']);
+    const ruleIndex = rules.findIndex(r => r.id === ruleId);
+
+    if (ruleIndex === -1) {
+      return { success: false, message: 'Rule not found' };
+    }
+
+    rules[ruleIndex].enabled = enabled;
+    await chrome.storage.local.set({ rules });
+
+    // Notify all tabs to re-apply rules
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (tab.id && tab.url && !tab.url.startsWith('chrome://')) {
+        try {
+          await chrome.tabs.sendMessage(tab.id, { action: 'rulesUpdated' });
+        } catch {
+          // Tab doesn't have content script
+        }
+      }
+    }
+
+    log('info', `Rule ${ruleId} ${enabled ? 'enabled' : 'disabled'}`);
+    return { success: true };
+  } catch (error) {
+    log('error', 'Failed to toggle rule', error.message);
+    return { success: false, message: error.message };
+  }
+}
+
+/**
  * Update badge with count of active rules
  */
 function updateBadge(tabId, count) {
@@ -281,7 +324,7 @@ function updateBadge(tabId, count) {
 /**
  * Match URL against glob pattern
  */
-function matchUrl(url, pattern) {
+function matchUrlPattern(url, pattern) {
   if (!url || !pattern) return false;
 
   const escaped = pattern
@@ -295,6 +338,25 @@ function matchUrl(url, pattern) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Match URL against rule (with exclusion support)
+ */
+function matchUrl(url, pattern, excludePatterns = []) {
+  // First check if URL matches the include pattern
+  if (!matchUrlPattern(url, pattern)) return false;
+
+  // Then check if URL matches any exclude pattern
+  if (excludePatterns && excludePatterns.length > 0) {
+    for (const excludePattern of excludePatterns) {
+      if (matchUrlPattern(url, excludePattern)) {
+        return false; // URL is excluded
+      }
+    }
+  }
+
+  return true;
 }
 
 // Set up periodic refresh

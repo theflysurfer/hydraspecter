@@ -10,7 +10,7 @@ const injectedStyles = new Set();
 /**
  * Match URL against glob pattern
  */
-function matchUrl(url, pattern) {
+function matchUrlPattern(url, pattern) {
   if (!url || !pattern) return false;
 
   const escaped = pattern
@@ -24,6 +24,25 @@ function matchUrl(url, pattern) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Match URL against rule (with exclusion support)
+ */
+function matchUrl(url, pattern, excludePatterns = []) {
+  // First check if URL matches the include pattern
+  if (!matchUrlPattern(url, pattern)) return false;
+
+  // Then check if URL matches any exclude pattern
+  if (excludePatterns && excludePatterns.length > 0) {
+    for (const excludePattern of excludePatterns) {
+      if (matchUrlPattern(url, excludePattern)) {
+        return false; // URL is excluded
+      }
+    }
+  }
+
+  return true;
 }
 
 /**

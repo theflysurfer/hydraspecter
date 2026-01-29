@@ -118,8 +118,22 @@ export class InjectionRuleManager {
       if (status && rule.status !== status) return false;
 
       try {
+        // Check include pattern
         const regex = globToRegex(rule.urlPattern);
-        return regex.test(url);
+        if (!regex.test(url)) return false;
+
+        // Check exclude patterns
+        if (rule.excludePatterns && rule.excludePatterns.length > 0) {
+          for (const excludePattern of rule.excludePatterns) {
+            const excludeRegex = globToRegex(excludePattern);
+            if (excludeRegex.test(url)) {
+              console.error(`[InjectionRuleManager] Rule ${rule.id} excluded by pattern: ${excludePattern}`);
+              return false;
+            }
+          }
+        }
+
+        return true;
       } catch {
         console.error(`[InjectionRuleManager] Invalid pattern for rule ${rule.id}: ${rule.urlPattern}`);
         return false;
@@ -137,6 +151,7 @@ export class InjectionRuleManager {
       id: generateId(input.name),
       name: input.name,
       urlPattern: input.urlPattern,
+      excludePatterns: input.excludePatterns,
       enabled: input.enabled ?? true,
       status: input.status ?? 'dev',
       css: input.css,
@@ -170,6 +185,7 @@ export class InjectionRuleManager {
       id: existingRule.id,
       name: updates.name ?? existingRule.name,
       urlPattern: updates.urlPattern ?? existingRule.urlPattern,
+      excludePatterns: updates.excludePatterns !== undefined ? updates.excludePatterns : existingRule.excludePatterns,
       enabled: updates.enabled ?? existingRule.enabled,
       status: updates.status ?? existingRule.status,
       css: updates.css !== undefined ? updates.css : existingRule.css,
