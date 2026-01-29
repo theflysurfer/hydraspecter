@@ -2,6 +2,7 @@ import { Tool, CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { Page, devices, ConsoleMessage, Request, Response } from 'playwright';
 import { promises as fs } from 'fs';
 import path from 'path';
+import os from 'os';
 import { BrowserManager } from './browser-manager.js';
 import { smartFormat } from './utils/toon-formatter.js';
 import {
@@ -210,6 +211,8 @@ export class BrowserTools {
   private networkMonitoringEnabled: Set<string> = new Set();
   // Downloads storage per instance/page
   private downloads: Map<string, DownloadEntry[]> = new Map();
+  // Persistent download directory
+  private downloadDir: string = path.join(os.homedir(), '.hydraspecter', 'downloads');
 
   constructor(
     private browserManager: BrowserManager,
@@ -451,6 +454,7 @@ export class BrowserTools {
 
   /**
    * Setup download handling for a page
+   * Downloads are saved persistently to ~/.hydraspecter/downloads/{instanceId}/
    */
   private setupDownloadHandling(instanceId: string, page: Page): void {
     if (!this.downloads.has(instanceId)) {
@@ -469,9 +473,21 @@ export class BrowserTools {
       this.downloads.set(instanceId, downloads);
 
       try {
-        // Wait for download to complete
-        const path = await download.path();
-        entry.path = path || undefined;
+        // Create persistent download directory for this instance
+        const instanceDownloadDir = path.join(this.downloadDir, instanceId);
+        await fs.mkdir(instanceDownloadDir, { recursive: true });
+
+        // Generate unique filename to avoid collisions
+        const timestamp = Date.now();
+        const filename = download.suggestedFilename();
+        const ext = path.extname(filename);
+        const base = path.basename(filename, ext);
+        const uniqueFilename = `${base}_${timestamp}${ext}`;
+        const savePath = path.join(instanceDownloadDir, uniqueFilename);
+
+        // Save to persistent location
+        await download.saveAs(savePath);
+        entry.path = savePath;
         entry.status = 'completed';
       } catch (error) {
         entry.status = 'failed';
@@ -1191,6 +1207,45 @@ Ideal for capturing API calls during user interactions.`,
             instanceId: {
               type: 'string',
               description: 'Instance ID or Page ID'
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+      {
+        name: 'browser_trigger_download',
+        description: `Trigger a file download by clicking a selector or fetching a URL directly.
+
+Downloads are saved to ~/.hydraspecter/downloads/{instanceId}/ and persist across sessions.
+
+**Methods:**
+1. Click a download link: { selector: "a[download]" }
+2. Direct URL download: { url: "https://example.com/file.pdf" }
+
+Returns the download path and filename.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            },
+            selector: {
+              type: 'string',
+              description: 'CSS selector for download link/button to click'
+            },
+            url: {
+              type: 'string',
+              description: 'Direct URL to download (alternative to selector)'
+            },
+            filename: {
+              type: 'string',
+              description: 'Custom filename for the download (optional)'
+            },
+            timeout: {
+              type: 'number',
+              description: 'Timeout in milliseconds (default: 30000)',
+              default: 30000
             }
           },
           required: ['instanceId']
@@ -2831,9 +2886,101 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             success: true,
             data: {
               downloads,
-              count: downloads.length
+              count: downloads.length,
+              downloadDir: path.join(this.downloadDir, args.instanceId)
             }
           };
+          break;
+        }
+
+        case 'browser_trigger_download': {
+          const page = this.getPage(args.instanceId);
+          if (!page) {
+            result = { success: false, error: `Instance ${args.instanceId} not found` };
+          } else if (!args.selector && !args.url) {
+            result = { success: false, error: 'Either selector or url is required' };
+          } else {
+            try {
+              const timeout = args.timeout || 30000;
+
+              if (args.url) {
+                // Direct URL download via injected anchor
+                const downloadPromise = page.waitForEvent('download', { timeout });
+
+                // Create a temporary link and click it
+                await page.evaluate((downloadUrl: string) => {
+                  const link = document.createElement('a');
+                  link.href = downloadUrl;
+                  link.download = ''; // Force download
+                  link.style.display = 'none';
+                  document.body.appendChild(link);
+                  link.click();
+                  document.body.removeChild(link);
+                }, args.url);
+
+                const download = await downloadPromise;
+
+                // Create persistent download directory
+                const instanceDownloadDir = path.join(this.downloadDir, args.instanceId);
+                await fs.mkdir(instanceDownloadDir, { recursive: true });
+
+                // Determine filename
+                const timestamp = Date.now();
+                const suggestedFilename = args.filename || download.suggestedFilename();
+                const ext = path.extname(suggestedFilename);
+                const base = path.basename(suggestedFilename, ext);
+                const uniqueFilename = `${base}_${timestamp}${ext}`;
+                const savePath = path.join(instanceDownloadDir, uniqueFilename);
+
+                await download.saveAs(savePath);
+
+                result = {
+                  success: true,
+                  data: {
+                    filename: suggestedFilename,
+                    path: savePath,
+                    url: download.url(),
+                    method: 'url'
+                  }
+                };
+              } else {
+                // Click-based download
+                const downloadPromise = page.waitForEvent('download', { timeout });
+                await page.click(args.selector, { timeout: 5000 });
+                const download = await downloadPromise;
+
+                // Create persistent download directory
+                const instanceDownloadDir = path.join(this.downloadDir, args.instanceId);
+                await fs.mkdir(instanceDownloadDir, { recursive: true });
+
+                // Determine filename
+                const timestamp = Date.now();
+                const suggestedFilename = args.filename || download.suggestedFilename();
+                const ext = path.extname(suggestedFilename);
+                const base = path.basename(suggestedFilename, ext);
+                const uniqueFilename = `${base}_${timestamp}${ext}`;
+                const savePath = path.join(instanceDownloadDir, uniqueFilename);
+
+                await download.saveAs(savePath);
+
+                result = {
+                  success: true,
+                  data: {
+                    filename: suggestedFilename,
+                    path: savePath,
+                    url: download.url(),
+                    method: 'click',
+                    selector: args.selector
+                  }
+                };
+              }
+            } catch (error) {
+              result = {
+                success: false,
+                error: `Trigger download failed: ${error instanceof Error ? error.message : error}`
+              };
+            }
+          }
           break;
         }
 

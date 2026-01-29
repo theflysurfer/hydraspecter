@@ -73,7 +73,11 @@ const ACTION_MAP: Record<string, string> = {
   'enable_console': 'browser_enable_console_capture',
   'network': 'browser_get_network_logs',
   'enable_network': 'browser_enable_network_monitoring',
+
+  // Downloads
   'downloads': 'browser_get_downloads',
+  'trigger_download': 'browser_trigger_download',
+  'download': 'browser_trigger_download',
 
   // API Bookmarks (LLM memory for endpoints)
   'save_endpoint': 'browser_save_endpoint',
@@ -136,6 +140,7 @@ export class MetaTool {
 • Extract: snapshot, screenshot, markdown, text, pdf
 • Wait: wait_element, wait_navigation, wait_request
 • Debug: enable_network, network, enable_console, console
+• Downloads: trigger_download, wait_download, downloads
 • Endpoints: capture, list_endpoints, save_endpoint, get_endpoint
 • Devices: devices (list 90+ devices for mobile/tablet emulation)
 • Backends: get_backend, switch_backend, list_backends, backend_rules
@@ -186,6 +191,12 @@ Sessions persist across all pools. Just use direct workspace URLs:
 • Get logs: { action: "network", pageId: "abc", options: { urlPattern: "api/save", limit: 10 } }
 • Wait for request: { action: "wait_request", pageId: "abc", options: { urlPattern: "saveTransaction", timeout: 5000 } }
 • Capture endpoint: { action: "capture", pageId: "abc", options: { urlPattern: "api/cart" } }
+
+**Downloads (persistent to ~/.hydraspecter/downloads/):**
+• Trigger by click: { action: "trigger_download", pageId: "abc", target: "a[download]" }
+• Trigger by URL: { action: "trigger_download", pageId: "abc", options: { url: "https://..." } }
+• Wait for download: { action: "wait_download", pageId: "abc" }
+• List downloads: { action: "downloads", pageId: "abc" }
 
 **Async Mode (for slow backends):**
 • Stealth backends (camoufox, seleniumbase) use async mode automatically to avoid MCP timeout
@@ -503,6 +514,12 @@ Sessions persist across all pools. Just use direct workspace URLs:
       case 'job_status':
         // job_status expects jobId, which can be in options or target
         if (target) result['jobId'] = target;
+        break;
+
+      case 'browser_trigger_download':
+        // target is selector for click-based download
+        if (target) result['selector'] = target;
+        // url can be in options for direct URL download
         break;
 
       default:

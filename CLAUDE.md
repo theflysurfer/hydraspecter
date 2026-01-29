@@ -190,6 +190,51 @@ Detection triggers automatic level increment. Persists to `~/.hydraspecter/domai
 - `browser_list_profiles` / `browser_release_profile`
 - `browser_switch_auth_profile` - Switch to pool-0 (auth sessions)
 
+### Downloads
+- `browser_trigger_download` - Trigger download (click selector or direct URL)
+- `browser_wait_for_download` - Wait for download to complete
+- `browser_get_downloads` - List all downloads for an instance
+
+## Downloads
+
+Downloads are saved persistently to `~/.hydraspecter/downloads/{pageId}/` and survive browser/session closure.
+
+### Trigger Download
+
+```javascript
+// Click a download link
+browser({ action: "trigger_download", pageId: "abc", target: "a[download]" })
+browser({ action: "trigger_download", pageId: "abc", target: "#download-btn" })
+
+// Direct URL download
+browser({ action: "trigger_download", pageId: "abc", options: { url: "https://example.com/file.pdf" } })
+
+// Custom filename
+browser({ action: "trigger_download", pageId: "abc", target: "a.download", options: { filename: "report.pdf" } })
+```
+
+### Wait for Download
+
+```javascript
+// Wait for download after clicking
+browser({ action: "wait_download", pageId: "abc" })
+
+// With custom save path
+browser({ action: "wait_download", pageId: "abc", options: { saveAs: "C:/Downloads/file.pdf" } })
+```
+
+### List Downloads
+
+```javascript
+// Get all downloads for an instance
+browser({ action: "downloads", pageId: "abc" })
+// Returns: { downloads: [...], count: N, downloadDir: "..." }
+```
+
+### Automatic Interception
+
+Any download triggered in the browser is automatically intercepted and saved to the persistent directory. The `browser_get_downloads` action lists all downloads with their status (pending/completed/failed) and file paths.
+
 ## Troubleshooting
 
 ### Not logged in (session not synced)
@@ -287,6 +332,7 @@ In `~/.claude.json`:
 ├── profiles/pool-{0-9}/     # 10 concurrent session pools (Playwright)
 ├── camoufox-profile/        # Camoufox Firefox profile
 ├── seleniumbase-profile/    # SeleniumBase Chrome profile
+├── downloads/{pageId}/      # Persistent downloads per instance
 ├── domain-intelligence.json # Protection levels
 ├── backend-rules.json       # Backend auto-selection rules
 ├── api-bookmarks.json       # Saved API endpoints
