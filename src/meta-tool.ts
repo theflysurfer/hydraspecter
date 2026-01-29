@@ -94,6 +94,16 @@ const ACTION_MAP: Record<string, string> = {
   'capture_endpoint': 'browser_capture_from_network',
   'capture': 'browser_capture_from_network',
 
+  // CSS/JS Injection (dev workflow)
+  'inject_css': 'browser_inject_css',
+  'inject_js': 'browser_inject_js',
+  'inject': 'browser_inject_css', // Default inject = CSS
+  'save_rule': 'browser_save_injection_rule',
+  'publish_rule': 'browser_publish_injection_rule',
+  'rules': 'browser_list_injection_rules',
+  'list_rules': 'browser_list_injection_rules',
+  'delete_rule': 'browser_delete_injection_rule',
+
   // Backend management (handled directly in MetaTool)
   'get_backend': '_meta_get_backend',
   'switch_backend': '_meta_switch_backend',
@@ -147,6 +157,7 @@ export class MetaTool {
 • Debug: enable_network, network, enable_console, console
 • Downloads: trigger_download, wait_download, downloads
 • Streams: capture_stream (capture HLS/DASH manifest URLs)
+• Injection: inject_css, inject_js, save_rule, publish_rule, rules, delete_rule
 • Endpoints: capture, list_endpoints, save_endpoint, get_endpoint
 • Devices: devices (list 90+ devices for mobile/tablet emulation)
 • Backends: get_backend, switch_backend, list_backends, backend_rules
@@ -211,6 +222,14 @@ Sessions persist across all pools. Just use direct workspace URLs:
 • Returns: manifests, qualities, ffmpeg/yt-dlp commands
 • Download video: { action: "download_stream", pageId: "abc" }
 • Downloads to: ~/.hydraspecter/videos/{pageId}/
+
+**CSS/JS Injection (dev workflow):**
+• Inject CSS: { action: "inject_css", pageId: "abc", options: { css: "body { background: #000; }" } }
+• Inject JS: { action: "inject_js", pageId: "abc", options: { js: "alert('Hello')" } }
+• Save rule: { action: "save_rule", options: { name: "Dark Mode", urlPattern: "*://google.com/*", css: "..." } }
+• Publish to Chrome: { action: "publish_rule", options: { ruleId: "..." } }
+• List rules: { action: "rules" }
+• Delete rule: { action: "delete_rule", options: { ruleId: "..." } }
 
 **Async Mode (for slow backends):**
 • Stealth backends (camoufox, seleniumbase) use async mode automatically to avoid MCP timeout
@@ -539,6 +558,46 @@ Sessions persist across all pools. Just use direct workspace URLs:
       case 'browser_capture_stream':
         // target can be used as urlPattern filter
         if (target) result['urlPattern'] = target;
+        break;
+
+      // CSS/JS Injection tools
+      case 'browser_inject_css':
+        // target can be CSS code for quick injection
+        if (target && !options?.['css'] && !options?.['cssFile']) {
+          result['css'] = target;
+        }
+        break;
+
+      case 'browser_inject_js':
+        // target can be JS code for quick injection
+        if (target && !options?.['js'] && !options?.['jsFile']) {
+          result['js'] = target;
+        }
+        break;
+
+      case 'browser_save_injection_rule':
+        // All params should come from options
+        break;
+
+      case 'browser_publish_injection_rule':
+        // target can be ruleId
+        if (target && !options?.['ruleId']) {
+          result['ruleId'] = target;
+        }
+        break;
+
+      case 'browser_list_injection_rules':
+        // target can be status filter
+        if (target && !options?.['status']) {
+          result['status'] = target;
+        }
+        break;
+
+      case 'browser_delete_injection_rule':
+        // target can be ruleId
+        if (target && !options?.['ruleId']) {
+          result['ruleId'] = target;
+        }
         break;
 
       default:

@@ -76,7 +76,8 @@ foreach ($i in $TargetPools) {
         Write-Host "  OK pool-$i ($size KB, $fileCount files)" -ForegroundColor Green
         $synced++
     } catch {
-        Write-Host "  FAIL pool-$i: $($_.Exception.Message)" -ForegroundColor Red
+        $errMsg = $_.Exception.Message
+        Write-Host "  FAIL pool-$i - $errMsg" -ForegroundColor Red
     }
 }
 

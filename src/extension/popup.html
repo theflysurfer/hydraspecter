@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; width: 340px; background: #1a1a2e; color: #eee; font-size: 12px; }
+    .header { padding: 12px 16px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); display: flex; align-items: center; justify-content: space-between; }
+    .header-left { display: flex; align-items: center; gap: 10px; }
+    .header h1 { font-size: 14px; font-weight: 600; }
+    .header .logo { width: 22px; height: 22px; background: rgba(255,255,255,0.2); border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: bold; }
+    .tabs { display: flex; background: #16213e; border-bottom: 1px solid #0f3460; }
+    .tab { flex: 1; padding: 8px; text-align: center; cursor: pointer; border: none; background: none; color: #888; font-size: 11px; }
+    .tab:hover { color: #ccc; }
+    .tab.active { color: #667eea; border-bottom: 2px solid #667eea; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .stats { display: flex; padding: 10px 16px; gap: 12px; background: #16213e; }
+    .stat { flex: 1; text-align: center; }
+    .stat-value { font-size: 18px; font-weight: 700; color: #667eea; }
+    .stat-label { font-size: 9px; color: #888; text-transform: uppercase; }
+    .section { padding: 10px 16px; }
+    .section-title { font-size: 9px; font-weight: 600; color: #667eea; text-transform: uppercase; margin-bottom: 6px; }
+    .rules-list { max-height: 120px; overflow-y: auto; }
+    .rule { display: flex; align-items: center; padding: 6px 8px; background: #16213e; border-radius: 4px; margin-bottom: 4px; gap: 8px; }
+    .rule-icon { width: 6px; height: 6px; border-radius: 50%; background: #4CAF50; }
+    .rule-info { flex: 1; min-width: 0; }
+    .rule-name { font-size: 11px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rule-pattern { font-size: 9px; color: #666; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rule-badge { font-size: 9px; padding: 2px 4px; border-radius: 3px; background: #0f3460; color: #667eea; }
+    .empty { text-align: center; padding: 12px; color: #666; font-size: 11px; }
+    .actions { padding: 10px 16px; border-top: 1px solid #0f3460; }
+    .btn { width: 100%; padding: 8px; border: none; border-radius: 4px; font-size: 11px; font-weight: 500; cursor: pointer; }
+    .btn-primary { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+    .last-sync { text-align: center; font-size: 9px; color: #666; padding: 6px; }
+    .current-page { padding: 6px 16px; background: #0f3460; font-size: 10px; }
+    .current-page-label { color: #667eea; font-size: 8px; text-transform: uppercase; }
+    .current-page-url { color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    /* Debug styles */
+    .debug-section { padding: 10px 16px; background: #0d1117; border-top: 1px solid #30363d; }
+    .debug-title { font-size: 9px; color: #f0883e; text-transform: uppercase; margin-bottom: 6px; }
+    .debug-item { background: #161b22; padding: 6px 8px; border-radius: 4px; margin-bottom: 4px; font-family: 'Consolas', monospace; font-size: 10px; }
+    .debug-label { color: #8b949e; font-size: 9px; }
+    .debug-value { color: #c9d1d9; word-break: break-all; }
+    .debug-value.success { color: #3fb950; }
+    .debug-value.error { color: #f85149; }
+    .debug-btn { background: #21262d; border: 1px solid #30363d; color: #c9d1d9; padding: 5px 8px; border-radius: 3px; cursor: pointer; font-size: 10px; margin-right: 4px; margin-top: 4px; }
+    .debug-btn:hover { background: #30363d; }
+    .debug-log { max-height: 100px; overflow-y: auto; background: #0d1117; padding: 6px; border-radius: 4px; font-family: 'Consolas', monospace; font-size: 9px; }
+    .log-entry { color: #8b949e; margin-bottom: 2px; }
+    .log-entry.error { color: #f85149; }
+    .log-entry.info { color: #58a6ff; }
+    .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+    .status-dot.success { background: #3fb950; }
+    .status-dot.error { background: #f85149; }
+    .status-dot.pending { background: #f0883e; }
+    .hint { font-size: 9px; color: #8b949e; background: #21262d; padding: 4px 6px; border-radius: 3px; margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <div class="logo">H</div>
+      <h1>HydraSpecter Inject</h1>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="main">Rules</button>
+    <button class="tab" data-tab="debug">Debug</button>
+  </div>
+
+  <!-- Main Tab -->
+  <div class="tab-content active" id="tab-main">
+    <div class="current-page">
+      <div class="current-page-label">Current Page</div>
+      <div class="current-page-url" id="currentUrl">-</div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="stat-value" id="totalRules">0</div><div class="stat-label">Total</div></div>
+      <div class="stat"><div class="stat-value" id="activeRules">0</div><div class="stat-label">Active</div></div>
+    </div>
+    <div class="section">
+      <div class="section-title">Active Rules</div>
+      <div class="rules-list" id="rulesList"><div class="empty">No matching rules</div></div>
+    </div>
+    <div class="actions"><button class="btn btn-primary" id="refreshBtn">Refresh Rules</button></div>
+    <div class="last-sync" id="lastSync">Never synced</div>
+  </div>
+
+  <!-- Debug Tab -->
+  <div class="tab-content" id="tab-debug">
+    <div class="debug-section">
+      <div class="debug-title">Extension</div>
+      <div class="debug-item"><div class="debug-label">ID</div><div class="debug-value" id="extId">-</div></div>
+      <div class="debug-item"><div class="debug-label">Version</div><div class="debug-value" id="extVersion">-</div></div>
+    </div>
+    <div class="debug-section">
+      <div class="debug-title">Native Host</div>
+      <div class="debug-item">
+        <div class="debug-label">Status</div>
+        <div class="debug-value" id="nativeStatus"><span class="status-dot pending"></span>Not tested</div>
+      </div>
+      <div id="nativeDetails"></div>
+      <button class="debug-btn" id="testNativeBtn">Test Connection</button>
+    </div>
+    <div class="debug-section">
+      <div class="debug-title">Storage</div>
+      <div class="debug-item"><div class="debug-label">Rules</div><div class="debug-value" id="storageRules">-</div></div>
+      <div class="debug-item"><div class="debug-label">Source</div><div class="debug-value" id="storageSource">-</div></div>
+      <div class="debug-item"><div class="debug-label">Last Error</div><div class="debug-value" id="storageError">None</div></div>
+    </div>
+    <div class="debug-section">
+      <div class="debug-title">Log</div>
+      <div class="debug-log" id="debugLog"><div class="log-entry">Click Load to view</div></div>
+      <button class="debug-btn" id="loadLogBtn">Load</button>
+      <button class="debug-btn" id="clearLogBtn">Clear</button>
+    </div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

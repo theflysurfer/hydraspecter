@@ -16,6 +16,16 @@ import {
   HumanizeMode,
   RateLimitConfig
 } from './types.js';
+import {
+  getInjectionRuleManager,
+  injectCSS,
+  injectCSSFile,
+  injectCSSWithId,
+  injectJS,
+  injectJSFile,
+  InjectionRule,
+  RuleStatus,
+} from './injection/index.js';
 
 /** Console log entry */
 interface ConsoleLogEntry {
@@ -1329,6 +1339,161 @@ Captures the HLS/DASH manifest and downloads via ffmpeg to ~/.hydraspecter/video
             }
           },
           required: ['instanceId']
+        }
+      },
+
+      // CSS/JS Injection Tools
+      {
+        name: 'browser_inject_css',
+        description: `Inject CSS into the current page.
+
+Supports inline CSS or loading from a file. Use for live preview during development.
+The CSS is injected via a <style> tag. Use !important to override existing styles.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            },
+            css: {
+              type: 'string',
+              description: 'CSS code to inject (inline)'
+            },
+            cssFile: {
+              type: 'string',
+              description: 'Path to CSS file (alternative to inline css). Supports ~ for home dir.'
+            },
+            id: {
+              type: 'string',
+              description: 'Optional ID for the style tag (allows removal/update later)'
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+      {
+        name: 'browser_inject_js',
+        description: `Inject JavaScript into the current page.
+
+Supports inline JS or loading from a file.
+- runAt: 'document_end' (default) - runs immediately
+- runAt: 'document_start' - registers for future navigations (won't affect current page)`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            },
+            js: {
+              type: 'string',
+              description: 'JavaScript code to inject (inline)'
+            },
+            jsFile: {
+              type: 'string',
+              description: 'Path to JS file (alternative to inline js). Supports ~ for home dir.'
+            },
+            runAt: {
+              type: 'string',
+              enum: ['document_start', 'document_end', 'document_idle'],
+              description: 'When to run: document_end (default, immediate), document_start (future navs)'
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+      {
+        name: 'browser_save_injection_rule',
+        description: `Save current CSS/JS as an injection rule.
+
+Rules are stored in ~/.hydraspecter/injection-rules.json.
+Status 'dev' = only applied in HydraSpecter, 'prod' = synced to Chrome extension.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: {
+              type: 'string',
+              description: 'Human-readable name for the rule'
+            },
+            urlPattern: {
+              type: 'string',
+              description: 'URL pattern to match (glob: *://example.com/*)'
+            },
+            css: {
+              type: 'string',
+              description: 'CSS code to inject'
+            },
+            cssFile: {
+              type: 'string',
+              description: 'Path to CSS file'
+            },
+            js: {
+              type: 'string',
+              description: 'JavaScript code to inject'
+            },
+            jsFile: {
+              type: 'string',
+              description: 'Path to JS file'
+            },
+            runAt: {
+              type: 'string',
+              enum: ['document_start', 'document_end', 'document_idle'],
+              description: 'When to run JS (default: document_end)'
+            },
+            status: {
+              type: 'string',
+              enum: ['dev', 'prod'],
+              description: 'Rule status: dev (default) or prod'
+            }
+          },
+          required: ['name', 'urlPattern']
+        }
+      },
+      {
+        name: 'browser_publish_injection_rule',
+        description: `Publish an injection rule to Chrome extension.
+
+Changes rule status from 'dev' to 'prod', making it visible to the Chrome extension.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            ruleId: {
+              type: 'string',
+              description: 'Rule ID to publish'
+            }
+          },
+          required: ['ruleId']
+        }
+      },
+      {
+        name: 'browser_list_injection_rules',
+        description: `List all injection rules.
+
+Shows all rules from ~/.hydraspecter/injection-rules.json.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            status: {
+              type: 'string',
+              enum: ['dev', 'prod', 'all'],
+              description: 'Filter by status (default: all)'
+            }
+          }
+        }
+      },
+      {
+        name: 'browser_delete_injection_rule',
+        description: `Delete an injection rule.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            ruleId: {
+              type: 'string',
+              description: 'Rule ID to delete'
+            }
+          },
+          required: ['ruleId']
         }
       },
 
@@ -3320,6 +3485,174 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               };
             }
           }
+          break;
+        }
+
+        // CSS/JS Injection Tools
+        case 'browser_inject_css': {
+          const page = await this.getPage(args.instanceId);
+          if (!page) {
+            result = { success: false, error: `Instance ${args.instanceId} not found` };
+            break;
+          }
+
+          if (!args.css && !args.cssFile) {
+            result = { success: false, error: 'Either css or cssFile is required' };
+            break;
+          }
+
+          let injectionResult;
+          if (args.id) {
+            // Use ID-based injection for removable styles
+            const css = args.css || (await fs.readFile(args.cssFile.replace(/^~/, os.homedir()), 'utf8'));
+            injectionResult = await injectCSSWithId(page, css, args.id);
+          } else if (args.css) {
+            injectionResult = await injectCSS(page, args.css);
+          } else {
+            injectionResult = await injectCSSFile(page, args.cssFile);
+          }
+
+          result = {
+            success: injectionResult.success,
+            data: injectionResult.success ? {
+              injected: true,
+              source: injectionResult.source,
+              type: 'css',
+              ...(args.id && { styleId: args.id })
+            } : undefined,
+            error: injectionResult.error
+          };
+          break;
+        }
+
+        case 'browser_inject_js': {
+          const page = await this.getPage(args.instanceId);
+          if (!page) {
+            result = { success: false, error: `Instance ${args.instanceId} not found` };
+            break;
+          }
+
+          if (!args.js && !args.jsFile) {
+            result = { success: false, error: 'Either js or jsFile is required' };
+            break;
+          }
+
+          const runAt = args.runAt || 'document_end';
+          let injectionResult;
+
+          if (args.js) {
+            injectionResult = await injectJS(page, args.js, runAt);
+          } else {
+            injectionResult = await injectJSFile(page, args.jsFile, runAt);
+          }
+
+          result = {
+            success: injectionResult.success,
+            data: injectionResult.success ? {
+              injected: true,
+              source: injectionResult.source,
+              type: 'js',
+              runAt,
+              result: injectionResult.result
+            } : undefined,
+            error: injectionResult.error
+          };
+          break;
+        }
+
+        case 'browser_save_injection_rule': {
+          if (!args.name || !args.urlPattern) {
+            result = { success: false, error: 'name and urlPattern are required' };
+            break;
+          }
+
+          if (!args.css && !args.cssFile && !args.js && !args.jsFile) {
+            result = { success: false, error: 'At least one of css, cssFile, js, or jsFile is required' };
+            break;
+          }
+
+          const manager = getInjectionRuleManager();
+          const rule = manager.addRule({
+            name: args.name,
+            urlPattern: args.urlPattern,
+            css: args.css,
+            cssFile: args.cssFile,
+            js: args.js,
+            jsFile: args.jsFile,
+            runAt: args.runAt,
+            status: (args.status as RuleStatus) || 'dev'
+          });
+
+          result = {
+            success: true,
+            data: {
+              rule,
+              configPath: manager.getConfigPath()
+            }
+          };
+          break;
+        }
+
+        case 'browser_publish_injection_rule': {
+          if (!args.ruleId) {
+            result = { success: false, error: 'ruleId is required' };
+            break;
+          }
+
+          const manager = getInjectionRuleManager();
+          const rule = manager.publishRule(args.ruleId);
+
+          if (rule) {
+            result = {
+              success: true,
+              data: {
+                rule,
+                message: `Rule "${rule.name}" published to prod. It will now be visible to the Chrome extension.`
+              }
+            };
+          } else {
+            result = { success: false, error: `Rule ${args.ruleId} not found` };
+          }
+          break;
+        }
+
+        case 'browser_list_injection_rules': {
+          const manager = getInjectionRuleManager();
+          let rules: InjectionRule[];
+
+          if (args.status && args.status !== 'all') {
+            rules = manager.getRulesByStatus(args.status as RuleStatus);
+          } else {
+            rules = manager.getAllRules();
+          }
+
+          result = {
+            success: true,
+            data: {
+              rules,
+              count: rules.length,
+              devCount: rules.filter(r => r.status === 'dev').length,
+              prodCount: rules.filter(r => r.status === 'prod').length,
+              configPath: manager.getConfigPath()
+            }
+          };
+          break;
+        }
+
+        case 'browser_delete_injection_rule': {
+          if (!args.ruleId) {
+            result = { success: false, error: 'ruleId is required' };
+            break;
+          }
+
+          const manager = getInjectionRuleManager();
+          const deleted = manager.removeRule(args.ruleId);
+
+          result = {
+            success: deleted,
+            data: deleted ? { deleted: true, ruleId: args.ruleId } : undefined,
+            error: deleted ? undefined : `Rule ${args.ruleId} not found`
+          };
           break;
         }
 

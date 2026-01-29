@@ -70,6 +70,9 @@ const AUTH_REQUIRED_DOMAINS = new Set([
   'outlook.com',
   'outlook.live.com',
   'teams.microsoft.com',
+  // Messaging apps (QR code login, session-based)
+  'web.whatsapp.com',
+  'web.telegram.org',
 ]);
 
 /**

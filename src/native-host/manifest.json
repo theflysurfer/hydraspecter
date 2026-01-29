@@ -1,0 +1,9 @@
+{
+  "name": "com.hydraspecter.inject",
+  "description": "HydraSpecter CSS/JS Injection Native Host",
+  "path": "C:\\Users\\julien\\OneDrive\\Coding\\_Projets de code\\MCP servers\\hydraspecter\\src\\native-host\\host.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://hagifkldjnflmhkkhjnonomjkfnhafjd/"
+  ]
+}

@@ -325,6 +325,61 @@ browser({ action: "download_stream", pageId: "abc", options: { filename: "docume
 
 For DRM-protected content (Netflix, etc.), the manifest URL is captured but direct download won't work due to encryption. Use specialized tools like `anystream` or screen recording.
 
+## CSS/JS Injection
+
+Inject custom CSS and JavaScript into web pages. Workflow: Dev in HydraSpecter → Publish to Chrome extension.
+
+### Quick Injection
+
+```javascript
+// Inject CSS (live preview)
+browser({ action: "inject_css", pageId: "abc", options: { css: "body { background: #000; }" } })
+
+// Inject JS
+browser({ action: "inject_js", pageId: "abc", options: { js: "document.title = 'Modified'" } })
+
+// With ID for later removal/update
+browser({ action: "inject_css", pageId: "abc", options: { css: "...", id: "my-style" } })
+```
+
+### Save & Publish Rules
+
+```javascript
+// Save rule (status: dev - only in HydraSpecter)
+browser({ action: "save_rule", options: {
+  name: "Google Dark Mode",
+  urlPattern: "*://www.google.com/*",
+  css: "body { background: #1a1a1a !important; }"
+}})
+
+// List all rules
+browser({ action: "rules" })
+
+// Publish to Chrome extension (status: prod)
+browser({ action: "publish_rule", options: { ruleId: "google-dark-mode-xyz" } })
+
+// Delete rule
+browser({ action: "delete_rule", options: { ruleId: "..." } })
+```
+
+### Rule Status
+
+| Status | Description |
+|--------|-------------|
+| `dev` | Only applied in HydraSpecter (for testing) |
+| `prod` | Synced to Chrome extension (for daily use) |
+
+### URL Pattern
+
+Glob-style patterns:
+- `*://www.google.com/*` - Google homepage
+- `*://*.google.com/*` - All Google subdomains
+- `https://github.com/*/issues/*` - GitHub issues
+
+### Storage
+
+Rules are stored in `~/.hydraspecter/injection-rules.json`.
+
 ## Troubleshooting
 
 ### Not logged in (session not synced)
@@ -358,6 +413,7 @@ Some domains are USELESS without login. The system auto-detects these and warns 
 - **Google private**: gmail.com, mail.google.com, calendar.google.com, drive.google.com, docs.google.com, sheets.google.com, meet.google.com
 - **Notion workspace**: notion.so (NOT notion.site = public pages)
 - **Private messaging**: slack.com, outlook.com, teams.microsoft.com
+- **Messaging apps**: web.whatsapp.com, web.telegram.org (QR code login, auto-switches to pool-0)
 
 ### Auth OPTIONAL (can scrape without login):
 - **Code hosting**: github.com, gitlab.com (public repos)
@@ -426,6 +482,7 @@ In `~/.claude.json`:
 ├── domain-intelligence.json # Protection levels
 ├── backend-rules.json       # Backend auto-selection rules
 ├── api-bookmarks.json       # Saved API endpoints
+├── injection-rules.json     # CSS/JS injection rules
 └── locks/                   # Pool lock files (prevent conflicts)
 ```
 
@@ -454,6 +511,19 @@ src/
 │   └── login-detector.ts
 ├── window/
 │   └── minimal-window.ts     # 100x100 always-on-top window
+├── injection/
+│   ├── types.ts              # InjectionRule interface
+│   ├── rule-manager.ts       # CRUD for injection rules
+│   └── injector.ts           # CSS/JS injection utilities
+├── extension/            # Chrome extension (HydraSpecter Inject)
+│   ├── manifest.json         # Manifest V3
+│   ├── background.js         # Service worker
+│   ├── content.js            # CSS/JS injection
+│   └── popup.html/js         # Extension UI
+├── native-host/          # Native messaging host
+│   ├── host.js               # Node.js bridge
+│   ├── host.bat              # Windows wrapper
+│   └── install.ps1           # Registry installer
 └── utils/                # Humanize, detection, resilience
 ```
 
