@@ -79,6 +79,11 @@ const ACTION_MAP: Record<string, string> = {
   'trigger_download': 'browser_trigger_download',
   'download': 'browser_trigger_download',
 
+  // Streams (video capture)
+  'capture_stream': 'browser_capture_stream',
+  'stream': 'browser_capture_stream',
+  'download_stream': 'browser_download_stream',
+
   // API Bookmarks (LLM memory for endpoints)
   'save_endpoint': 'browser_save_endpoint',
   'bookmark': 'browser_save_endpoint',
@@ -141,6 +146,7 @@ export class MetaTool {
 • Wait: wait_element, wait_navigation, wait_request
 • Debug: enable_network, network, enable_console, console
 • Downloads: trigger_download, wait_download, downloads
+• Streams: capture_stream (capture HLS/DASH manifest URLs)
 • Endpoints: capture, list_endpoints, save_endpoint, get_endpoint
 • Devices: devices (list 90+ devices for mobile/tablet emulation)
 • Backends: get_backend, switch_backend, list_backends, backend_rules
@@ -197,6 +203,14 @@ Sessions persist across all pools. Just use direct workspace URLs:
 • Trigger by URL: { action: "trigger_download", pageId: "abc", options: { url: "https://..." } }
 • Wait for download: { action: "wait_download", pageId: "abc" }
 • List downloads: { action: "downloads", pageId: "abc" }
+
+**Video Streams (capture HLS/DASH manifests):**
+• Enable network first: { action: "create", options: { enableNetworkMonitoring: true } }
+• Capture stream: { action: "capture_stream", pageId: "abc" }
+• Best quality (default): { action: "capture_stream", pageId: "abc", options: { quality: "best" } }
+• Returns: manifests, qualities, ffmpeg/yt-dlp commands
+• Download video: { action: "download_stream", pageId: "abc" }
+• Downloads to: ~/.hydraspecter/videos/{pageId}/
 
 **Async Mode (for slow backends):**
 • Stealth backends (camoufox, seleniumbase) use async mode automatically to avoid MCP timeout
@@ -520,6 +534,11 @@ Sessions persist across all pools. Just use direct workspace URLs:
         // target is selector for click-based download
         if (target) result['selector'] = target;
         // url can be in options for direct URL download
+        break;
+
+      case 'browser_capture_stream':
+        // target can be used as urlPattern filter
+        if (target) result['urlPattern'] = target;
         break;
 
       default:

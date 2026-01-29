@@ -58,6 +58,17 @@ import { getGlobalProfile, GlobalProfile, AllProfilesInUseError, switchToAuthPro
 import { getDomainIntelligence, DomainIntelligence, requiresAuth } from './domain-intelligence.js';
 import { getApiBookmarks } from './api-bookmarks.js';
 import { getJobManager } from './job-manager.js';
+import {
+  isStreamManifest,
+  parseM3U8Manifest,
+  parseMPDManifest,
+  selectBestQuality,
+  selectWorstQuality,
+  generateFfmpegCommand,
+  generateYtdlpCommand,
+  getBaseUrl
+} from './utils/stream-detector.js';
+import type { StreamManifest, CaptureStreamResult } from './types.js';
 
 /**
  * Transform jQuery-style selectors to Playwright-compatible selectors.
@@ -1246,6 +1257,75 @@ Returns the download path and filename.`,
               type: 'number',
               description: 'Timeout in milliseconds (default: 30000)',
               default: 30000
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+      {
+        name: 'browser_capture_stream',
+        description: `Capture HLS/DASH streaming manifest URLs from network logs.
+
+Returns master manifest URL, available qualities, and download commands.
+**Default**: Selects best quality (highest bandwidth/resolution).
+Requires network monitoring to be enabled.
+
+**Supported sites**: Arte, Le Monde, and most HLS/DASH streaming platforms.
+**Note**: Netflix and other DRM-protected content will capture manifest but cannot be downloaded directly.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            },
+            urlPattern: {
+              type: 'string',
+              description: 'Filter pattern for manifest URLs (default: m3u8|mpd)'
+            },
+            quality: {
+              type: 'string',
+              enum: ['best', 'worst', 'all'],
+              description: 'Quality selection: best (default), worst, or all variants'
+            },
+            parseQualities: {
+              type: 'boolean',
+              description: 'Fetch and parse manifest to extract quality variants (default: true)'
+            },
+            saveName: {
+              type: 'string',
+              description: 'Save captured stream to bookmarks with this name'
+            }
+          },
+          required: ['instanceId']
+        }
+      },
+      {
+        name: 'browser_download_stream',
+        description: `Download video stream using ffmpeg.
+
+Captures the HLS/DASH manifest and downloads via ffmpeg to ~/.hydraspecter/videos/.
+**Requires**: ffmpeg installed and in PATH, network monitoring enabled.
+**Default**: Downloads best quality.`,
+        inputSchema: {
+          type: 'object',
+          properties: {
+            instanceId: {
+              type: 'string',
+              description: 'Instance ID or Page ID'
+            },
+            filename: {
+              type: 'string',
+              description: 'Output filename (default: auto-generated from page title)'
+            },
+            quality: {
+              type: 'string',
+              enum: ['best', 'worst'],
+              description: 'Quality selection: best (default) or worst'
+            },
+            timeout: {
+              type: 'number',
+              description: 'Download timeout in seconds (default: 3600 = 1 hour)'
             }
           },
           required: ['instanceId']
@@ -2978,6 +3058,265 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
               result = {
                 success: false,
                 error: `Trigger download failed: ${error instanceof Error ? error.message : error}`
+              };
+            }
+          }
+          break;
+        }
+
+        case 'browser_capture_stream': {
+          const page = this.getPage(args.instanceId);
+          if (!page) {
+            result = { success: false, error: `Instance ${args.instanceId} not found` };
+          } else if (!this.networkMonitoringEnabled.has(args.instanceId)) {
+            result = {
+              success: false,
+              error: 'Network monitoring not enabled. Use browser_create with enableNetworkMonitoring: true, or call enable_network first.'
+            };
+          } else {
+            try {
+              const logs = this.networkLogs.get(args.instanceId) || [];
+              const urlPattern = args.urlPattern
+                ? new RegExp(args.urlPattern, 'i')
+                : /\.(m3u8|mpd)(\?|$)/i;
+
+              // Find all manifest URLs
+              const manifestUrls = logs
+                .filter(log => urlPattern.test(log.url))
+                .map(log => log.url)
+                .filter((url, i, arr) => arr.indexOf(url) === i); // Deduplicate
+
+              if (manifestUrls.length === 0) {
+                result = {
+                  success: false,
+                  error: 'No streaming manifests found. Make sure video playback has started.',
+                  data: {
+                    hint: 'Try clicking play button and waiting for video to load',
+                    logsCount: logs.length
+                  }
+                };
+              } else {
+                const manifests: StreamManifest[] = [];
+                const parseQualities = args.parseQualities !== false;
+                const quality = args.quality || 'best';
+
+                for (const manifestUrl of manifestUrls) {
+                  const streamType = isStreamManifest(manifestUrl);
+                  if (!streamType) continue;
+
+                  const manifest: StreamManifest = {
+                    url: manifestUrl,
+                    type: streamType,
+                  };
+
+                  // Parse manifest if requested
+                  if (parseQualities) {
+                    try {
+                      const response = await page.evaluate(async (url: string) => {
+                        const res = await fetch(url);
+                        return res.text();
+                      }, manifestUrl);
+
+                      const baseUrl = getBaseUrl(manifestUrl);
+                      let parsed;
+
+                      if (streamType === 'hls') {
+                        parsed = parseM3U8Manifest(response, baseUrl);
+                      } else {
+                        parsed = parseMPDManifest(response, baseUrl);
+                      }
+
+                      manifest.variants = parsed.variants;
+                      manifest.audioTracks = parsed.audioTracks;
+                      manifest.subtitles = parsed.subtitles;
+                      manifest.hasDrm = parsed.hasDrm;
+                      manifest.drmSystem = parsed.drmSystem;
+
+                      // Select quality
+                      if (parsed.variants.length > 0) {
+                        if (quality === 'best') {
+                          manifest.selectedQuality = selectBestQuality(parsed.variants);
+                        } else if (quality === 'worst') {
+                          manifest.selectedQuality = selectWorstQuality(parsed.variants);
+                        }
+                        // 'all' doesn't select a specific quality
+                      }
+                    } catch (parseError) {
+                      // Continue without parsed data
+                      console.error('Failed to parse manifest:', parseError);
+                    }
+                  }
+
+                  manifests.push(manifest);
+                }
+
+                // Generate download commands
+                const pageUrl = page.url();
+                const bestManifest = manifests[0];
+                const downloadUrl = bestManifest?.selectedQuality?.url || bestManifest?.url || manifestUrls[0] || '';
+
+                const captureResult: CaptureStreamResult = {
+                  manifests,
+                  pageUrl,
+                  downloadCommands: downloadUrl ? {
+                    ffmpeg: generateFfmpegCommand(downloadUrl),
+                    ytdlp: generateYtdlpCommand(pageUrl),
+                  } : undefined,
+                };
+
+                // Add DRM warning if detected
+                if (manifests.some(m => m.hasDrm)) {
+                  captureResult.warning = 'DRM detected. Manifest captured but direct download may not work. Use yt-dlp or specialized tools.';
+                }
+
+                // Save to bookmarks if requested
+                if (args.saveName && manifests.length > 0 && manifests[0]) {
+                  const bookmarks = getApiBookmarks();
+                  const domain = new URL(pageUrl).hostname;
+                  bookmarks.addEndpoint(domain, args.saveName, {
+                    method: 'GET',
+                    url: manifests[0].url,
+                  }, {
+                    tags: ['stream', manifests[0].type],
+                    notes: `Captured from ${pageUrl}`,
+                  });
+                }
+
+                result = {
+                  success: true,
+                  data: captureResult
+                };
+              }
+            } catch (error) {
+              result = {
+                success: false,
+                error: `Capture stream failed: ${error instanceof Error ? error.message : error}`
+              };
+            }
+          }
+          break;
+        }
+
+        case 'browser_download_stream': {
+          const page = this.getPage(args.instanceId);
+          if (!page) {
+            result = { success: false, error: `Instance ${args.instanceId} not found` };
+          } else if (!this.networkMonitoringEnabled.has(args.instanceId)) {
+            result = {
+              success: false,
+              error: 'Network monitoring not enabled. Use browser_create with enableNetworkMonitoring: true, or call enable_network first.'
+            };
+          } else {
+            try {
+              // First, capture the stream
+              const logs = this.networkLogs.get(args.instanceId) || [];
+              const urlPattern = /\.(m3u8|mpd)(\?|$)/i;
+
+              const manifestUrls = logs
+                .filter(log => urlPattern.test(log.url))
+                .map(log => log.url)
+                .filter((url, i, arr) => arr.indexOf(url) === i);
+
+              const manifestUrl = manifestUrls[0];
+              if (!manifestUrl) {
+                result = {
+                  success: false,
+                  error: 'No streaming manifests found. Make sure video playback has started.'
+                };
+              } else {
+                // Parse manifest to get best/worst quality
+                const streamType = isStreamManifest(manifestUrl);
+                let downloadUrl = manifestUrl;
+
+                if (streamType === 'hls') {
+                  try {
+                    const response = await page.evaluate(async (url: string) => {
+                      const res = await fetch(url);
+                      return res.text();
+                    }, manifestUrl as string);
+
+                    const baseUrl = getBaseUrl(manifestUrl);
+                    const parsed = parseM3U8Manifest(response, baseUrl);
+
+                    if (parsed.variants.length > 0) {
+                      const selected = args.quality === 'worst'
+                        ? selectWorstQuality(parsed.variants)
+                        : selectBestQuality(parsed.variants);
+                      if (selected?.url) {
+                        downloadUrl = selected.url;
+                      }
+                    }
+
+                    // Check for DRM
+                    if (parsed.hasDrm) {
+                      result = {
+                        success: false,
+                        error: `DRM detected (${parsed.drmSystem}). Cannot download protected content directly.`
+                      };
+                      break;
+                    }
+                  } catch {
+                    // Continue with master manifest URL
+                  }
+                }
+
+                // Create video directory
+                const videoDir = path.join(os.homedir(), '.hydraspecter', 'videos', args.instanceId);
+                await fs.mkdir(videoDir, { recursive: true });
+
+                // Generate filename
+                const pageTitle = await page.title();
+                const sanitizedTitle = pageTitle
+                  .replace(/[<>:"/\\|?*]/g, '')
+                  .replace(/\s+/g, '_')
+                  .substring(0, 100) || 'video';
+                const timestamp = Date.now();
+                const filename = args.filename || `${sanitizedTitle}_${timestamp}.mp4`;
+                const outputPath = path.join(videoDir, filename);
+
+                // Check if ffmpeg is available
+                const { exec } = await import('child_process');
+                const { promisify } = await import('util');
+                const execAsync = promisify(exec);
+
+                try {
+                  await execAsync('ffmpeg -version');
+                } catch {
+                  result = {
+                    success: false,
+                    error: 'ffmpeg not found. Please install ffmpeg and ensure it is in PATH.'
+                  };
+                  break;
+                }
+
+                // Execute ffmpeg download
+                const timeout = (args.timeout || 3600) * 1000; // Default 1 hour
+                const ffmpegCmd = `ffmpeg -i "${downloadUrl}" -c copy -bsf:a aac_adtstoasc "${outputPath}" -y`;
+
+                result = {
+                  success: true,
+                  data: {
+                    status: 'downloading',
+                    manifestUrl: downloadUrl,
+                    outputPath,
+                    command: ffmpegCmd,
+                    message: 'Download started. This may take a while depending on video length.'
+                  }
+                };
+
+                // Start download in background (don't await)
+                execAsync(ffmpegCmd, { timeout })
+                  .then(() => {
+                    console.log(`[HydraSpecter] Download complete: ${outputPath}`);
+                  })
+                  .catch((err) => {
+                    console.error(`[HydraSpecter] Download failed: ${err.message}`);
+                  });
+              }
+            } catch (error) {
+              result = {
+                success: false,
+                error: `Download stream failed: ${error instanceof Error ? error.message : error}`
               };
             }
           }

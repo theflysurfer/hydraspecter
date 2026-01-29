@@ -222,4 +222,84 @@ export interface SitesConfig {
   };
   /** Default profile applied to all sites */
   defaults?: SiteProfile;
-} 
+}
+
+// ============================================
+// Video Stream Capture Types
+// ============================================
+
+/** Stream type detected from URL */
+export type StreamType = 'hls' | 'dash';
+
+/** A single stream quality variant */
+export interface StreamVariant {
+  /** Direct URL to this variant's playlist/manifest */
+  url: string;
+  /** Bandwidth in bits per second */
+  bandwidth: number;
+  /** Resolution (e.g., "1920x1080") */
+  resolution?: string;
+  /** Codec info (e.g., "avc1.64001f,mp4a.40.2") */
+  codecs?: string;
+  /** Frame rate if available */
+  frameRate?: number;
+}
+
+/** Audio track information */
+export interface AudioTrack {
+  /** Track URL */
+  url?: string;
+  /** Language code (e.g., "fr", "en") */
+  language: string;
+  /** Display name (e.g., "Français", "English") */
+  name?: string;
+  /** Is this the default track */
+  default?: boolean;
+}
+
+/** Subtitle track information */
+export interface SubtitleTrack {
+  /** Subtitle URL */
+  url?: string;
+  /** Language code */
+  language: string;
+  /** Display name */
+  name?: string;
+  /** Is forced subtitle */
+  forced?: boolean;
+}
+
+/** Captured stream manifest with parsed information */
+export interface StreamManifest {
+  /** Master manifest URL */
+  url: string;
+  /** Stream type (hls or dash) */
+  type: StreamType;
+  /** Selected quality variant (best by default) */
+  selectedQuality?: StreamVariant;
+  /** All available quality variants */
+  variants?: StreamVariant[];
+  /** Available audio tracks */
+  audioTracks?: AudioTrack[];
+  /** Available subtitle tracks */
+  subtitles?: SubtitleTrack[];
+  /** Whether content is DRM protected */
+  hasDrm?: boolean;
+  /** DRM system if detected (widevine, playready, fairplay) */
+  drmSystem?: string;
+}
+
+/** Result from capture_stream action */
+export interface CaptureStreamResult {
+  /** Captured manifests */
+  manifests: StreamManifest[];
+  /** Page URL where streams were captured */
+  pageUrl: string;
+  /** Generated download commands */
+  downloadCommands?: {
+    ffmpeg?: string;
+    ytdlp?: string;
+  };
+  /** Warning message (e.g., DRM detected) */
+  warning?: string;
+}

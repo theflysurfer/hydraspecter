@@ -195,6 +195,10 @@ Detection triggers automatic level increment. Persists to `~/.hydraspecter/domai
 - `browser_wait_for_download` - Wait for download to complete
 - `browser_get_downloads` - List all downloads for an instance
 
+### Video Streams
+- `browser_capture_stream` - Capture HLS/DASH manifest URLs and generate download commands
+- `browser_download_stream` - Download video via ffmpeg to ~/.hydraspecter/videos/
+
 ## Downloads
 
 Downloads are saved persistently to `~/.hydraspecter/downloads/{pageId}/` and survive browser/session closure.
@@ -234,6 +238,92 @@ browser({ action: "downloads", pageId: "abc" })
 ### Automatic Interception
 
 Any download triggered in the browser is automatically intercepted and saved to the persistent directory. The `browser_get_downloads` action lists all downloads with their status (pending/completed/failed) and file paths.
+
+## Video Stream Capture
+
+Capture HLS (.m3u8) and DASH (.mpd) streaming manifest URLs from video platforms like Arte, Le Monde, etc.
+
+### Workflow
+
+```javascript
+// 1. Create browser with network monitoring
+browser({ action: "create", options: { enableNetworkMonitoring: true } })
+
+// 2. Navigate to video page
+browser({ action: "navigate", pageId: "abc", target: "https://www.arte.tv/fr/videos/..." })
+
+// 3. Wait for video player to load (player auto-fetches manifests)
+// Then capture the stream
+browser({ action: "capture_stream", pageId: "abc" })
+```
+
+### Options
+
+```javascript
+// Best quality (default)
+browser({ action: "capture_stream", pageId: "abc" })
+
+// Worst quality (for testing)
+browser({ action: "capture_stream", pageId: "abc", options: { quality: "worst" } })
+
+// Custom URL pattern
+browser({ action: "capture_stream", pageId: "abc", target: "m3u8" })
+
+// Save to bookmarks
+browser({ action: "capture_stream", pageId: "abc", options: { saveName: "arte-documentary" } })
+```
+
+### Download Video (via ffmpeg)
+
+```javascript
+// Download best quality (default)
+browser({ action: "download_stream", pageId: "abc" })
+
+// Download worst quality (for testing)
+browser({ action: "download_stream", pageId: "abc", options: { quality: "worst" } })
+
+// Custom filename
+browser({ action: "download_stream", pageId: "abc", options: { filename: "documentary.mp4" } })
+```
+
+**Destination:** `~/.hydraspecter/videos/{pageId}/`
+
+**Requires:** ffmpeg installed and in PATH.
+
+### Output
+
+```json
+{
+  "manifests": [{
+    "url": "https://manifest-arte.akamaized.net/.../video.m3u8",
+    "type": "hls",
+    "selectedQuality": {
+      "url": "https://cdn.../video_1080p.m3u8",
+      "bandwidth": 5000000,
+      "resolution": "1920x1080"
+    },
+    "variants": [...],
+    "audioTracks": [{ "language": "fr", "name": "Français" }],
+    "subtitles": [{ "language": "en", "name": "English" }]
+  }],
+  "downloadCommands": {
+    "ffmpeg": "ffmpeg -i ... -c copy output.mp4",
+    "ytdlp": "yt-dlp ..."
+  }
+}
+```
+
+### Supported Sites
+
+| Site | Format | DRM | Notes |
+|------|--------|-----|-------|
+| Arte | HLS | No | Full support |
+| Le Monde | HLS | No | Full support |
+| Netflix | DASH | Widevine | Manifest only (DRM blocks download) |
+
+### DRM Warning
+
+For DRM-protected content (Netflix, etc.), the manifest URL is captured but direct download won't work due to encryption. Use specialized tools like `anystream` or screen recording.
 
 ## Troubleshooting
 
