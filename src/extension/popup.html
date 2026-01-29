@@ -77,6 +77,7 @@
 
   <div class="tabs">
     <button class="tab active" data-tab="main">Rules</button>
+    <button class="tab" data-tab="cookies">Cookies</button>
     <button class="tab" data-tab="debug">Debug</button>
   </div>
 
@@ -96,6 +97,42 @@
     </div>
     <div class="actions"><button class="btn btn-primary" id="refreshBtn">Refresh Rules</button></div>
     <div class="last-sync" id="lastSync">Never synced</div>
+  </div>
+
+  <!-- Cookies Tab -->
+  <div class="tab-content" id="tab-cookies">
+    <div class="section">
+      <div class="section-title">Export Cookies to HydraSpecter</div>
+      <p style="font-size: 10px; color: #888; margin-bottom: 12px; line-height: 1.4;">
+        Export your Chrome cookies to HydraSpecter profiles. This lets you use logged-in sessions without Google blocking automation.
+      </p>
+      <button class="btn btn-primary" id="exportGoogleBtn" style="margin-bottom: 8px;">
+        Export Google Cookies
+      </button>
+      <button class="btn" id="exportAllBtn" style="background: #21262d; color: #c9d1d9; border: 1px solid #30363d;">
+        Export All Cookies
+      </button>
+    </div>
+    <div class="section">
+      <div class="section-title">Export Status</div>
+      <div class="debug-item">
+        <div class="debug-label">Last Export</div>
+        <div class="debug-value" id="lastExport">Never</div>
+      </div>
+      <div class="debug-item">
+        <div class="debug-label">Result</div>
+        <div class="debug-value" id="exportResult">-</div>
+      </div>
+    </div>
+    <div class="section" style="background: #0f3460; border-radius: 4px; padding: 10px;">
+      <div style="font-size: 10px; color: #667eea; font-weight: 600; margin-bottom: 4px;">How it works</div>
+      <div style="font-size: 9px; color: #888; line-height: 1.5;">
+        1. Login to Google/sites in this Chrome browser<br>
+        2. Click "Export Google Cookies"<br>
+        3. Cookies are saved to HydraSpecter pools<br>
+        4. HydraSpecter will use these sessions
+      </div>
+    </div>
   </div>
 
   <!-- Debug Tab -->

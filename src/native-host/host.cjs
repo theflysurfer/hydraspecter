@@ -11,6 +11,8 @@ const path = require('path');
 const os = require('os');
 
 const RULES_PATH = path.join(os.homedir(), '.hydraspecter', 'injection-rules.json');
+const PROFILES_DIR = path.join(os.homedir(), '.hydraspecter', 'profiles');
+const EXPORTED_COOKIES_PATH = path.join(os.homedir(), '.hydraspecter', 'exported-cookies.json');
 
 /**
  * Read a message from stdin (Chrome native messaging protocol)
@@ -69,6 +71,62 @@ function writeMessage(message) {
 }
 
 /**
+ * Import cookies from Chrome extension into HydraSpecter profiles
+ * Saves as Playwright-compatible storage state format
+ */
+function importCookies(cookies, domains) {
+  try {
+    // Create storage state object
+    const storageState = {
+      cookies: cookies,
+      origins: [] // We don't have localStorage from extension, but cookies are the important part
+    };
+
+    // Save to exported-cookies.json (single file for debugging)
+    fs.mkdirSync(path.dirname(EXPORTED_COOKIES_PATH), { recursive: true });
+    fs.writeFileSync(EXPORTED_COOKIES_PATH, JSON.stringify(storageState, null, 2));
+
+    // Also save directly to each pool's cookies
+    let poolsUpdated = 0;
+    if (fs.existsSync(PROFILES_DIR)) {
+      const pools = fs.readdirSync(PROFILES_DIR).filter(d => d.startsWith('pool-'));
+
+      for (const pool of pools) {
+        const poolDir = path.join(PROFILES_DIR, pool, 'Default', 'Network');
+        const cookiesPath = path.join(poolDir, 'Cookies');
+
+        // Check if the pool has a Cookies database
+        if (fs.existsSync(cookiesPath)) {
+          // We can't easily write to SQLite from here without better-sqlite3
+          // Instead, we'll save a JSON file that HydraSpecter can read on startup
+          const jsonPath = path.join(PROFILES_DIR, pool, 'imported-cookies.json');
+          fs.writeFileSync(jsonPath, JSON.stringify(storageState, null, 2));
+          poolsUpdated++;
+        } else {
+          // Pool might not have cookies yet, create the directory structure
+          fs.mkdirSync(poolDir, { recursive: true });
+          const jsonPath = path.join(PROFILES_DIR, pool, 'imported-cookies.json');
+          fs.writeFileSync(jsonPath, JSON.stringify(storageState, null, 2));
+          poolsUpdated++;
+        }
+      }
+    }
+
+    return {
+      success: true,
+      message: `Exported ${cookies.length} cookies to ${poolsUpdated} pools`,
+      exportedPath: EXPORTED_COOKIES_PATH,
+      poolsUpdated
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.message
+    };
+  }
+}
+
+/**
  * Load rules from JSON file
  */
 function loadRules() {
@@ -108,6 +166,12 @@ async function main() {
       });
     } else if (message.action === 'ping') {
       writeMessage({ pong: true, timestamp: Date.now() });
+    } else if (message.action === 'importCookies') {
+      const result = importCookies(message.cookies || [], message.domains || []);
+      writeMessage({
+        ...result,
+        timestamp: Date.now()
+      });
     } else {
       writeMessage({ error: `Unknown action: ${message.action}` });
     }

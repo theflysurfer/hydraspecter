@@ -78,6 +78,10 @@ const AUTH_REQUIRED_DOMAINS = new Set([
   'www.homeexchange.com',
   'homeexchange.fr',
   'www.homeexchange.fr',
+  // Ragic database (requires login)
+  'ragic.com',
+  'www.ragic.com',
+  'eu2.ragic.com',
 ]);
 
 /**

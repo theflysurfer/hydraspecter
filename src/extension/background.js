@@ -359,6 +359,94 @@ function matchUrl(url, pattern, excludePatterns = []) {
   return true;
 }
 
+/**
+ * Export cookies for specified domains to HydraSpecter profiles
+ * @param {string[]} domains - Domains to export (e.g., ['.google.com', '.notion.so'])
+ */
+async function exportCookies(domains = []) {
+  log('info', `Exporting cookies for domains: ${domains.join(', ') || 'ALL'}`);
+
+  try {
+    let allCookies = [];
+
+    if (domains.length === 0) {
+      // Export ALL cookies (be careful - this is a lot)
+      allCookies = await chrome.cookies.getAll({});
+    } else {
+      // Export cookies for specific domains
+      for (const domain of domains) {
+        const cookies = await chrome.cookies.getAll({ domain });
+        allCookies = allCookies.concat(cookies);
+      }
+    }
+
+    log('info', `Found ${allCookies.length} cookies to export`);
+
+    // Convert to Playwright format
+    const playwrightCookies = allCookies.map(cookie => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain,
+      path: cookie.path,
+      expires: cookie.expirationDate || -1,
+      httpOnly: cookie.httpOnly,
+      secure: cookie.secure,
+      sameSite: cookie.sameSite === 'no_restriction' ? 'None' :
+                cookie.sameSite === 'lax' ? 'Lax' :
+                cookie.sameSite === 'strict' ? 'Strict' : 'Lax'
+    }));
+
+    // Send to native host for import into HydraSpecter profiles
+    const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
+      action: 'importCookies',
+      cookies: playwrightCookies,
+      domains: domains
+    });
+
+    if (response && response.success) {
+      log('info', `Cookies exported successfully: ${response.message}`);
+      return {
+        success: true,
+        count: playwrightCookies.length,
+        message: response.message
+      };
+    } else {
+      throw new Error(response?.error || 'Unknown error from native host');
+    }
+  } catch (error) {
+    log('error', 'Cookie export failed', error.message);
+    return {
+      success: false,
+      message: error.message
+    };
+  }
+}
+
+/**
+ * Export Google cookies specifically (most common use case)
+ */
+async function exportGoogleCookies() {
+  return exportCookies(['.google.com', '.youtube.com', '.googleapis.com']);
+}
+
+/**
+ * Handle messages from content scripts and popup
+ */
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Cookie export actions
+  if (message.action === 'exportCookies') {
+    exportCookies(message.domains || []).then(sendResponse);
+    return true;
+  }
+
+  if (message.action === 'exportGoogleCookies') {
+    exportGoogleCookies().then(sendResponse);
+    return true;
+  }
+
+  // Continue with existing message handlers below...
+});
+
 // Set up periodic refresh
 setInterval(refreshRules, REFRESH_INTERVAL);
 

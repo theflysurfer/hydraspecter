@@ -499,6 +499,19 @@ export class GlobalProfile {
     // Syncs: Cookies (all) + Local Storage (all) + IndexedDB (critical domains)
     await syncSessionDataFromChrome(this.profileDir);
 
+    // Check for imported cookies from Chrome extension
+    const importedCookiesPath = path.join(this.profileDir, 'imported-cookies.json');
+    let importedCookies: any[] = [];
+    if (fs.existsSync(importedCookiesPath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(importedCookiesPath, 'utf-8'));
+        importedCookies = data.cookies || [];
+        console.error(`[GlobalProfile] Found ${importedCookies.length} imported cookies from Chrome extension`);
+      } catch (e) {
+        console.error(`[GlobalProfile] Failed to read imported cookies: ${e}`);
+      }
+    }
+
     console.error(`[GlobalProfile] Launching persistent context from: ${this.profileDir}`);
 
     const launchOptions: any = {
@@ -521,8 +534,8 @@ export class GlobalProfile {
       ],
       // Realistic viewport for anti-detection (Gemini recommendation)
       viewport: { width: 1440, height: 900 },
-      // Modern User-Agent (Gemini recommendation)
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      // Modern User-Agent (updated January 2026 - Chrome 131)
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     };
 
     // Use real Chrome if specified
@@ -543,6 +556,16 @@ export class GlobalProfile {
         configurable: true
       });
     });
+
+    // Import cookies from Chrome extension if available
+    if (importedCookies.length > 0) {
+      try {
+        await this.context.addCookies(importedCookies);
+        console.error(`[GlobalProfile] Imported ${importedCookies.length} cookies into context`);
+      } catch (e) {
+        console.error(`[GlobalProfile] Failed to import some cookies: ${e}`);
+      }
+    }
 
     // Handle context close
     this.context.on('close', () => {

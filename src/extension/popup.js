@@ -228,11 +228,71 @@ async function refreshRules() {
   }
 }
 
+// Elements - Cookies
+const exportGoogleBtn = document.getElementById('exportGoogleBtn');
+const exportAllBtn = document.getElementById('exportAllBtn');
+const lastExportEl = document.getElementById('lastExport');
+const exportResultEl = document.getElementById('exportResult');
+
+async function exportGoogleCookies() {
+  exportGoogleBtn.disabled = true;
+  exportGoogleBtn.textContent = 'Exporting...';
+  exportResultEl.textContent = 'Working...';
+  exportResultEl.className = 'debug-value';
+
+  try {
+    const result = await chrome.runtime.sendMessage({ action: 'exportGoogleCookies' });
+
+    if (result.success) {
+      lastExportEl.textContent = new Date().toLocaleTimeString();
+      exportResultEl.textContent = result.message || `Exported ${result.count} cookies`;
+      exportResultEl.className = 'debug-value success';
+    } else {
+      exportResultEl.textContent = result.message || 'Failed';
+      exportResultEl.className = 'debug-value error';
+    }
+  } catch (error) {
+    exportResultEl.textContent = error.message;
+    exportResultEl.className = 'debug-value error';
+  } finally {
+    exportGoogleBtn.disabled = false;
+    exportGoogleBtn.textContent = 'Export Google Cookies';
+  }
+}
+
+async function exportAllCookies() {
+  exportAllBtn.disabled = true;
+  exportAllBtn.textContent = 'Exporting...';
+  exportResultEl.textContent = 'Working...';
+  exportResultEl.className = 'debug-value';
+
+  try {
+    const result = await chrome.runtime.sendMessage({ action: 'exportCookies', domains: [] });
+
+    if (result.success) {
+      lastExportEl.textContent = new Date().toLocaleTimeString();
+      exportResultEl.textContent = result.message || `Exported ${result.count} cookies`;
+      exportResultEl.className = 'debug-value success';
+    } else {
+      exportResultEl.textContent = result.message || 'Failed';
+      exportResultEl.className = 'debug-value error';
+    }
+  } catch (error) {
+    exportResultEl.textContent = error.message;
+    exportResultEl.className = 'debug-value error';
+  } finally {
+    exportAllBtn.disabled = false;
+    exportAllBtn.textContent = 'Export All Cookies';
+  }
+}
+
 // Event listeners
 refreshBtn.addEventListener('click', refreshRules);
 testNativeBtn.addEventListener('click', testNativeConnection);
 loadLogBtn.addEventListener('click', loadDebugLog);
 clearLogBtn.addEventListener('click', clearDebugLog);
+exportGoogleBtn?.addEventListener('click', exportGoogleCookies);
+exportAllBtn?.addEventListener('click', exportAllCookies);
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') updateUI();
