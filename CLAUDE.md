@@ -417,6 +417,19 @@ browserType.launchPersistentContext: Target page, context or browser has been cl
 - Single camoufox profile (all AI sites share same session)
 - If you need multi-account, use different backends or manual cookie management
 
+**Tested & Working (2026-01-30)**:
+| Site | Backend | Persistence | Notes |
+|------|---------|-------------|-------|
+| ChatGPT | camoufox (auto) | ✅ | Full interface, GPTs list, account visible |
+| Perplexity | camoufox (auto) | ✅ | Pro account, auto-login via Google cookies |
+| Claude.ai | camoufox (auto) | ✅ | "Evening, Julien", Opus 4.5 available |
+
+**How Google SSO works across sites**:
+1. Login to ChatGPT with Google → Google cookies saved to `camoufox-state.json`
+2. Open Perplexity → Detects Google cookies → Auto-login
+3. Open Claude.ai → Same Google cookies → Auto-login
+4. All sessions persist because they share the same state file
+
 ### Auto-Selection Not Working (Fixed 2026-01-30)
 
 **Problem**: `browser({ action: "create", target: "https://chatgpt.com" })` was using Playwright instead of camoufox.
