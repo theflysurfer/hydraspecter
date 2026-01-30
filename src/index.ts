@@ -18,7 +18,7 @@ program
   .option('-t, --instance-timeout <number>', 'Instance timeout in minutes', (value) => parseInt(value) * 60 * 1000, defaultConfig.instanceTimeout)
   .option('-c, --cleanup-interval <number>', 'Cleanup interval in minutes', (value) => parseInt(value) * 60 * 1000, defaultConfig.cleanupInterval)
   .option('--browser <browser>', 'Default browser type', 'chromium')
-  .option('--headless', 'Default headless mode', true)
+  .option('--headless', 'Default headless mode (default: false for anti-detection)', false)
   .option('--width <number>', 'Default viewport width (0 for natural)', (value) => parseInt(value), defaultConfig.defaultBrowserConfig.viewport?.width || 1280)
   .option('--height <number>', 'Default viewport height (0 for natural)', (value) => parseInt(value), defaultConfig.defaultBrowserConfig.viewport?.height || 720)
   .option('--natural-viewport', 'Use natural viewport size (recommended for anti-detection)', false)

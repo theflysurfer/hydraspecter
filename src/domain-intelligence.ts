@@ -92,7 +92,7 @@ const PROTECTION_LEVELS: Record<ProtectionLevel, ProtectionSettings> = {
     humanizeMouse: false,
     humanizeTyping: false,
     humanizeScroll: false,
-    headless: true,
+    headless: false, // Visible browser for anti-detection
     delays: {
       beforeClick: [0, 0],
       beforeType: [0, 0],
@@ -103,7 +103,7 @@ const PROTECTION_LEVELS: Record<ProtectionLevel, ProtectionSettings> = {
     humanizeMouse: true,
     humanizeTyping: true,
     humanizeScroll: true,
-    headless: true,
+    headless: false, // Visible browser for anti-detection
     delays: {
       beforeClick: [100, 300],
       beforeType: [50, 150],
