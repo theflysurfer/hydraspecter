@@ -7,7 +7,8 @@
     from Chrome to Chromium. Instead, log in once on pool-0 in HydraSpecter,
     then use this script to sync to other pools.
 
-    Syncs: Cookies, History, Bookmarks, Web Data, Preferences, Local State
+    Syncs: Cookies, History, Bookmarks, Web Data, Preferences, Local State,
+    Local Storage, IndexedDB, Session Storage, Service Worker.
     This makes the browser look "lived in" for anti-detection.
 #>
 
@@ -30,9 +31,12 @@ $SyncFiles = @(
     @{ Src = "Default\Preferences"; Required = $false }
 )
 
-# Directories to sync (Local Storage for Telegram, WhatsApp, etc.)
+# Directories to sync (session data for modern web apps)
 $SyncDirs = @(
-    "Default\Local Storage"
+    "Default\Local Storage",
+    "Default\IndexedDB",
+    "Default\Session Storage",
+    "Default\Service Worker"
 )
 
 $sourceDir = Join-Path $ProfilesDir "pool-$SourcePool"

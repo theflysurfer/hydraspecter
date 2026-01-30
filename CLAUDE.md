@@ -464,17 +464,63 @@ if (effectiveBackend === 'auto' && args.url) {
 
 ### Not logged in (session not synced)
 
-**Chrome v127+ uses App-Bound encryption (v20)** - cookies are tied to Chrome's identity and CANNOT be copied to Chromium/HydraSpecter.
+**Chrome v127+ uses App-Bound encryption (v20)** - cookies are tied to Chrome's identity and CANNOT be copied from real Chrome to HydraSpecter.
 
-**Solution: Manual login once per site**
+**Solution: Manual login once per site in HydraSpecter**
 1. Create a browser: `browser({ action: "create", target: "https://notion.so/login" })`
 2. Login manually in the visible HydraSpecter window (pool-0)
-3. Sync to all pools:
+3. Close browser, then sync to all pools:
 ```powershell
 .\scripts\sync-pools.ps1
 ```
 
-This copies cookies from pool-0 → pool-1 to pool-9. Sessions persist until cookie expiration.
+**What sync-pools.ps1 copies (CRITICAL for session persistence)**:
+
+| Data | Location | Why |
+|------|----------|-----|
+| **Cookies** | `Default/Network/Cookies` | Authentication tokens |
+| **IndexedDB** | `Default/IndexedDB/` | Modern app sessions (React/Vue SPAs) |
+| **Local Storage** | `Default/Local Storage/` | JWT tokens, user preferences |
+| **Session Storage** | `Default/Session Storage/` | Temporary session data |
+| **Service Worker** | `Default/Service Worker/` | PWA cache, offline data |
+| **Local State** | `Local State` | Chrome encryption key |
+| **History** | `Default/History` | Anti-detection (looks lived-in) |
+| **Web Data** | `Default/Web Data` | Form autofill |
+
+**IndexedDB is critical!** Many modern sites (HomeExchange, Notion, etc.) store auth tokens in IndexedDB, not cookies. Without IndexedDB sync, sessions appear logged out even with cookies present.
+
+**Debug if sessions don't work after sync**:
+```powershell
+# Check IndexedDB size (should be >1MB if logged into sites)
+(Get-Item "$env:USERPROFILE\.hydraspecter\profiles\pool-0\Default\IndexedDB").Length / 1MB
+
+# Compare pool-0 vs pool-4
+(Get-Item "$env:USERPROFILE\.hydraspecter\profiles\pool-4\Default\IndexedDB").Length / 1MB
+```
+
+If sizes differ significantly, run sync again after closing all browsers.
+
+### Pool sync worked but still not logged in (Fixed 2026-01-30)
+
+**Problem**: `sync-pools.ps1` reported "9/9 pools synced" but sessions on pool-1+ were not logged in.
+
+**Root Cause**: The sync script was NOT copying **IndexedDB** where modern SPAs store auth tokens.
+
+| Pool | IndexedDB Size | Result |
+|------|----------------|--------|
+| pool-0 | 11 MB | Logged in |
+| pool-4 | 11 KB | NOT logged in |
+
+**Solution**: Added IndexedDB, Session Storage, and Service Worker to sync script.
+
+**Files Modified**:
+- `scripts/sync-pools.ps1` - Added `Default\IndexedDB`, `Default\Session Storage`, `Default\Service Worker` to `$SyncDirs`
+
+**After fix**:
+```
+pool-0: 11 MB IndexedDB → Logged in
+pool-4: 11 MB IndexedDB → Logged in (synced correctly)
+```
 
 ### Click fails on SPA (React/Vue)
 ```javascript
