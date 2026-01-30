@@ -25,9 +25,11 @@ function initStealth() {
 }
 
 // Critical domains that need session data (cookies + localStorage + IndexedDB)
+// Note: This matches partial domain names, so 'homeexchange' matches both .com and .fr
 const CRITICAL_DOMAINS = [
-  'google', 'notion', 'amazon', 'temu', 'github', 'gitlab',
-  'spotify', 'netflix', 'dropbox', 'slack', 'discord', 'linkedin'
+  'google', 'youtube', 'notion', 'amazon', 'temu', 'github', 'gitlab',
+  'spotify', 'netflix', 'dropbox', 'slack', 'discord', 'linkedin',
+  'homeexchange', 'kiabi', 'aliexpress'
 ];
 
 /**
@@ -171,6 +173,155 @@ function syncCookiesViaSqlite(chromeCookiesPath: string, targetCookiesPath: stri
       console.error(`[SessionSync] ⊘ SQLite sync failed: ${error.message}`);
     }
     return false;
+  }
+}
+
+/**
+ * Convert Unix timestamp (seconds) to Chrome epoch (microseconds since 1601-01-01)
+ */
+function unixToChrome(unixSeconds: number): bigint {
+  // Chrome epoch: microseconds since January 1, 1601
+  // Unix epoch: seconds since January 1, 1970
+  // Difference: 11644473600 seconds
+  if (unixSeconds <= 0) return BigInt(0); // Session cookie
+  return BigInt(Math.floor((unixSeconds + 11644473600) * 1000000));
+}
+
+/**
+ * Convert SameSite string to Chromium integer
+ */
+function sameSiteToInt(sameSite: string | undefined): number {
+  switch (sameSite?.toLowerCase()) {
+    case 'strict': return 2;
+    case 'lax': return 1;
+    case 'none': return 0;
+    default: return -1; // Unspecified
+  }
+}
+
+/**
+ * Inject cookies from storage-state.json directly into Chromium's SQLite database.
+ * This must run BEFORE the browser launches for persistent context.
+ *
+ * Chrome's addCookies() API doesn't work reliably with persistent contexts,
+ * so we inject directly into the database.
+ */
+function injectCookiesIntoChromiumDb(profileDir: string, cookies: any[]): number {
+  if (!cookies || cookies.length === 0) return 0;
+
+  const cookiesDbPath = path.join(profileDir, 'Default', 'Network', 'Cookies');
+
+  // Ensure directory exists
+  fs.mkdirSync(path.dirname(cookiesDbPath), { recursive: true });
+
+  try {
+    // Open or create database
+    const db = new Database(cookiesDbPath);
+
+    // Always ensure meta table exists with correct version (Chromium requires this)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS meta(key LONGVARCHAR NOT NULL UNIQUE PRIMARY KEY, value LONGVARCHAR);
+      INSERT OR REPLACE INTO meta(key, value) VALUES('mmap_status', '-1');
+      INSERT OR REPLACE INTO meta(key, value) VALUES('version', '24');
+      INSERT OR REPLACE INTO meta(key, value) VALUES('last_compatible_version', '24');
+    `);
+
+    // Check if cookies table exists, create if not
+    const tableExists = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='cookies'"
+    ).get();
+
+    if (!tableExists) {
+      // Create Chromium cookies table schema
+      db.exec(`
+        CREATE TABLE cookies(
+          creation_utc INTEGER NOT NULL,
+          host_key TEXT NOT NULL,
+          top_frame_site_key TEXT NOT NULL,
+          name TEXT NOT NULL,
+          value TEXT NOT NULL,
+          encrypted_value BLOB NOT NULL,
+          path TEXT NOT NULL,
+          expires_utc INTEGER NOT NULL,
+          is_secure INTEGER NOT NULL,
+          is_httponly INTEGER NOT NULL,
+          last_access_utc INTEGER NOT NULL,
+          has_expires INTEGER NOT NULL,
+          is_persistent INTEGER NOT NULL,
+          priority INTEGER NOT NULL,
+          samesite INTEGER NOT NULL,
+          source_scheme INTEGER NOT NULL,
+          source_port INTEGER NOT NULL,
+          last_update_utc INTEGER NOT NULL,
+          source_type INTEGER NOT NULL,
+          has_cross_site_ancestor INTEGER NOT NULL,
+          UNIQUE (host_key, top_frame_site_key, name, path)
+        )
+      `);
+    }
+
+    // Prepare insert/replace statement
+    const insertStmt = db.prepare(`
+      INSERT OR REPLACE INTO cookies (
+        creation_utc, host_key, top_frame_site_key, name, value, encrypted_value,
+        path, expires_utc, is_secure, is_httponly, last_access_utc, has_expires,
+        is_persistent, priority, samesite, source_scheme, source_port,
+        last_update_utc, source_type, has_cross_site_ancestor
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const now = unixToChrome(Date.now() / 1000);
+    let injected = 0;
+
+    // Insert all cookies in a transaction
+    const insertMany = db.transaction((cookiesList: any[]) => {
+      for (const c of cookiesList) {
+        const expiresUtc = unixToChrome(c.expires || 0);
+        const hasExpires = c.expires && c.expires > 0 ? 1 : 0;
+        const isPersistent = hasExpires;
+
+        // Normalize domain - Chromium uses host_key
+        // ".example.com" for wildcard, "www.example.com" for exact
+        const hostKey = c.domain.startsWith('.') ? c.domain : c.domain;
+
+        try {
+          insertStmt.run(
+            now,                           // creation_utc
+            hostKey,                       // host_key
+            '',                            // top_frame_site_key (empty for first-party)
+            c.name,                        // name
+            c.value,                       // value (unencrypted for Chromium)
+            Buffer.alloc(0),               // encrypted_value (empty, not encrypted)
+            c.path || '/',                 // path
+            expiresUtc,                    // expires_utc
+            c.secure ? 1 : 0,              // is_secure
+            c.httpOnly ? 1 : 0,            // is_httponly
+            now,                           // last_access_utc
+            hasExpires,                    // has_expires
+            isPersistent,                  // is_persistent
+            1,                             // priority (medium)
+            sameSiteToInt(c.sameSite),     // samesite
+            c.secure ? 2 : 1,              // source_scheme (Secure=2, NonSecure=1)
+            c.secure ? 443 : 80,           // source_port
+            now,                           // last_update_utc
+            1,                             // source_type (HTTP=1)
+            0                              // has_cross_site_ancestor
+          );
+          injected++;
+        } catch (e: any) {
+          // Skip invalid cookies
+          console.error(`[CookieInject] Skipped cookie ${c.name}: ${e.message}`);
+        }
+      }
+    });
+
+    insertMany(cookies);
+    db.close();
+
+    return injected;
+  } catch (error: any) {
+    console.error(`[CookieInject] Failed to inject cookies: ${error.message}`);
+    return 0;
   }
 }
 
@@ -499,17 +650,40 @@ export class GlobalProfile {
     // Syncs: Cookies (all) + Local Storage (all) + IndexedDB (critical domains)
     await syncSessionDataFromChrome(this.profileDir);
 
-    // Check for imported cookies from Chrome extension
+    // Check for storage state from Chrome extension (cookies + localStorage)
+    const storageStatePath = path.join(this.profileDir, 'storage-state.json');
     const importedCookiesPath = path.join(this.profileDir, 'imported-cookies.json');
     let importedCookies: any[] = [];
-    if (fs.existsSync(importedCookiesPath)) {
+    let importedLocalStorage: { origin: string; localStorage: { name: string; value: string }[] }[] = [];
+
+    // Try storage-state.json first (newer format with localStorage)
+    if (fs.existsSync(storageStatePath)) {
+      try {
+        const data = JSON.parse(fs.readFileSync(storageStatePath, 'utf-8'));
+        importedCookies = data.cookies || [];
+        importedLocalStorage = data.origins || [];
+        console.error(`[GlobalProfile] Found storage state: ${importedCookies.length} cookies, ${importedLocalStorage.length} localStorage origins`);
+      } catch (e) {
+        console.error(`[GlobalProfile] Failed to read storage state: ${e}`);
+      }
+    }
+    // Fallback to imported-cookies.json (backward compatibility)
+    else if (fs.existsSync(importedCookiesPath)) {
       try {
         const data = JSON.parse(fs.readFileSync(importedCookiesPath, 'utf-8'));
         importedCookies = data.cookies || [];
+        importedLocalStorage = data.origins || [];
         console.error(`[GlobalProfile] Found ${importedCookies.length} imported cookies from Chrome extension`);
       } catch (e) {
         console.error(`[GlobalProfile] Failed to read imported cookies: ${e}`);
       }
+    }
+
+    // Inject cookies directly into Chromium's SQLite database BEFORE launching
+    // This is required because context.addCookies() doesn't work reliably with persistent contexts
+    if (importedCookies.length > 0) {
+      const injected = injectCookiesIntoChromiumDb(this.profileDir, importedCookies);
+      console.error(`[GlobalProfile] Injected ${injected}/${importedCookies.length} cookies into Chromium database`);
     }
 
     console.error(`[GlobalProfile] Launching persistent context from: ${this.profileDir}`);
@@ -557,14 +731,33 @@ export class GlobalProfile {
       });
     });
 
-    // Import cookies from Chrome extension if available
-    if (importedCookies.length > 0) {
-      try {
-        await this.context.addCookies(importedCookies);
-        console.error(`[GlobalProfile] Imported ${importedCookies.length} cookies into context`);
-      } catch (e) {
-        console.error(`[GlobalProfile] Failed to import some cookies: ${e}`);
+    // Note: Cookies are already injected into Chromium's SQLite database BEFORE launching
+    // (see injectCookiesIntoChromiumDb call above). We don't use context.addCookies() because
+    // it doesn't work reliably with persistent contexts.
+
+    // Inject localStorage restoration script for each origin
+    // This will restore localStorage when navigating to matching origins
+    if (importedLocalStorage.length > 0) {
+      const localStorageMap = new Map<string, { name: string; value: string }[]>();
+      for (const origin of importedLocalStorage) {
+        localStorageMap.set(origin.origin, origin.localStorage);
       }
+
+      await this.context.addInitScript((origins: Record<string, { name: string; value: string }[]>) => {
+        const currentOrigin = window.location.origin;
+        const items = origins[currentOrigin];
+        if (items) {
+          for (const { name, value } of items) {
+            try {
+              localStorage.setItem(name, value);
+            } catch {
+              // localStorage might be disabled or full
+            }
+          }
+        }
+      }, Object.fromEntries(localStorageMap));
+
+      console.error(`[GlobalProfile] Registered localStorage restoration for ${importedLocalStorage.length} origins`);
     }
 
     // Handle context close

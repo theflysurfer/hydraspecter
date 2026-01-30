@@ -102,16 +102,21 @@
   <!-- Cookies Tab -->
   <div class="tab-content" id="tab-cookies">
     <div class="section">
-      <div class="section-title">Export Cookies to HydraSpecter</div>
-      <p style="font-size: 10px; color: #888; margin-bottom: 12px; line-height: 1.4;">
-        Export your Chrome cookies to HydraSpecter profiles. This lets you use logged-in sessions without Google blocking automation.
+      <div class="section-title">🔐 Export ALL Site Sessions</div>
+      <p style="font-size: 10px; color: #888; margin-bottom: 8px; line-height: 1.4;">
+        Export cookies for all configured sites at once. Open tabs for sites needing localStorage (Google, Notion).
       </p>
-      <button class="btn btn-primary" id="exportGoogleBtn" style="margin-bottom: 8px;">
-        Export Google Cookies
+      <button class="btn btn-primary" id="exportAllSitesBtn" style="margin-bottom: 8px; background: linear-gradient(135deg, #f85149 0%, #ff7b72 100%);">
+        🚀 Export ALL Sites
       </button>
-      <button class="btn" id="exportAllBtn" style="background: #21262d; color: #c9d1d9; border: 1px solid #30363d;">
-        Export All Cookies
-      </button>
+      <div id="exportProgress" style="font-size: 10px; color: #888; margin-bottom: 8px; display: none;"></div>
+    </div>
+
+    <div class="section" style="border-top: 1px solid #30363d; padding-top: 12px;">
+      <div class="section-title">Export Specific Site</div>
+      <div id="sitesList" style="max-height: 150px; overflow-y: auto; margin-bottom: 8px;">
+        <div class="empty">Loading sites...</div>
+      </div>
     </div>
     <div class="section">
       <div class="section-title">Export Status</div>

@@ -11,6 +11,64 @@
 const NATIVE_HOST_NAME = 'com.hydraspecter.inject';
 const REFRESH_INTERVAL = 30000; // 30 seconds
 
+// Sites configuration - what each site needs
+const SITES_CONFIG = {
+  google: {
+    name: "Google (Gmail, YouTube, Drive)",
+    domains: [".google.com", ".youtube.com", ".googleapis.com"],
+    tabPatterns: ["*://*.google.com/*", "*://mail.google.com/*", "*://accounts.google.com/*", "*://*.youtube.com/*"],
+    needs: { cookies: true, localStorage: true, indexedDB: true }
+  },
+  homeexchange: {
+    name: "HomeExchange",
+    domains: [".homeexchange.com", ".homeexchange.fr", "homeexchange.com", "homeexchange.fr"],
+    tabPatterns: ["*://*.homeexchange.com/*", "*://*.homeexchange.fr/*"],
+    needs: { cookies: true, localStorage: true, indexedDB: false }
+  },
+  notion: {
+    name: "Notion",
+    domains: [".notion.so"],
+    tabPatterns: ["*://*.notion.so/*"],
+    needs: { cookies: true, localStorage: true, indexedDB: true }
+  },
+  amazon: {
+    name: "Amazon",
+    domains: [".amazon.fr", ".amazon.com", ".amazon.de"],
+    tabPatterns: ["*://*.amazon.fr/*", "*://*.amazon.com/*", "*://*.amazon.de/*"],
+    needs: { cookies: true, localStorage: true, indexedDB: false }
+  },
+  github: {
+    name: "GitHub",
+    domains: [".github.com"],
+    tabPatterns: ["*://*.github.com/*"],
+    needs: { cookies: true, localStorage: true, indexedDB: false }
+  },
+  kiabi: {
+    name: "Kiabi",
+    domains: [".kiabi.com"],
+    tabPatterns: ["*://*.kiabi.com/*"],
+    needs: { cookies: true, localStorage: false, indexedDB: false }
+  },
+  temu: {
+    name: "Temu",
+    domains: [".temu.com"],
+    tabPatterns: ["*://*.temu.com/*"],
+    needs: { cookies: true, localStorage: true, indexedDB: false }
+  },
+  aliexpress: {
+    name: "AliExpress",
+    domains: [".aliexpress.com"],
+    tabPatterns: ["*://*.aliexpress.com/*"],
+    needs: { cookies: true, localStorage: true, indexedDB: false }
+  },
+  discord: {
+    name: "Discord",
+    domains: [".discord.com"],
+    tabPatterns: ["*://*.discord.com/*"],
+    needs: { cookies: true, localStorage: true, indexedDB: true }
+  }
+};
+
 // Debug state
 let debugLog = [];
 const MAX_DEBUG_LOG = 100;
@@ -430,6 +488,242 @@ async function exportGoogleCookies() {
 }
 
 /**
+ * Export FULL session state (cookies + localStorage + IndexedDB)
+ * This is needed for Google auth which uses all three
+ */
+async function exportFullSession(domains = ['.google.com', '.youtube.com']) {
+  log('info', `Exporting full session for: ${domains.join(', ')}`);
+
+  const result = {
+    cookies: [],
+    localStorage: [],
+    indexedDB: [],
+    exportedAt: new Date().toISOString()
+  };
+
+  try {
+    // 1. Export cookies (same as before)
+    for (const domain of domains) {
+      const cookies = await chrome.cookies.getAll({ domain });
+      result.cookies = result.cookies.concat(cookies.map(cookie => ({
+        name: cookie.name,
+        value: cookie.value,
+        domain: cookie.domain,
+        path: cookie.path,
+        expires: cookie.expirationDate || -1,
+        httpOnly: cookie.httpOnly,
+        secure: cookie.secure,
+        sameSite: cookie.sameSite === 'no_restriction' ? 'None' :
+                  cookie.sameSite === 'lax' ? 'Lax' :
+                  cookie.sameSite === 'strict' ? 'Strict' : 'Lax'
+      })));
+    }
+    log('info', `Exported ${result.cookies.length} cookies`);
+
+    // 2. Export localStorage and IndexedDB from Google tabs
+    const tabs = await chrome.tabs.query({ url: ['*://*.google.com/*', '*://mail.google.com/*', '*://accounts.google.com/*'] });
+
+    for (const tab of tabs) {
+      if (!tab.id) continue;
+
+      try {
+        // Export localStorage
+        const lsResponse = await chrome.tabs.sendMessage(tab.id, { action: 'exportLocalStorage' });
+        if (lsResponse && lsResponse.data) {
+          result.localStorage.push(lsResponse);
+          log('info', `Exported localStorage from ${lsResponse.origin}: ${Object.keys(lsResponse.data).length} keys`);
+        }
+
+        // Export IndexedDB
+        const idbResponse = await chrome.tabs.sendMessage(tab.id, { action: 'exportIndexedDB' });
+        if (idbResponse && idbResponse.databases) {
+          result.indexedDB.push(idbResponse);
+          log('info', `Exported IndexedDB from ${idbResponse.origin}: ${idbResponse.databases.length} databases`);
+        }
+      } catch (e) {
+        log('debug', `Could not export from tab ${tab.url}: ${e.message}`);
+      }
+    }
+
+    // 3. Send to native host
+    const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
+      action: 'importFullSession',
+      session: result
+    });
+
+    if (response && response.success) {
+      log('info', `Full session exported: ${response.message}`);
+      return {
+        success: true,
+        cookies: result.cookies.length,
+        localStorage: result.localStorage.length,
+        indexedDB: result.indexedDB.length,
+        message: response.message
+      };
+    } else {
+      throw new Error(response?.error || 'Unknown error from native host');
+    }
+  } catch (error) {
+    log('error', 'Full session export failed', error.message);
+    return {
+      success: false,
+      message: error.message
+    };
+  }
+}
+
+/**
+ * Export session for a specific site from SITES_CONFIG
+ * @param {string} siteKey - Key from SITES_CONFIG (e.g., 'google', 'homeexchange')
+ */
+async function exportSiteSession(siteKey) {
+  const site = SITES_CONFIG[siteKey];
+  if (!site) {
+    return { success: false, message: `Unknown site: ${siteKey}` };
+  }
+
+  log('info', `Exporting session for ${site.name}...`);
+
+  const result = {
+    site: siteKey,
+    siteName: site.name,
+    cookies: [],
+    localStorage: [],
+    indexedDB: [],
+    exportedAt: new Date().toISOString()
+  };
+
+  try {
+    // 1. Export cookies for all domains
+    if (site.needs.cookies) {
+      for (const domain of site.domains) {
+        const cookies = await chrome.cookies.getAll({ domain });
+        result.cookies = result.cookies.concat(cookies.map(cookie => ({
+          name: cookie.name,
+          value: cookie.value,
+          domain: cookie.domain,
+          path: cookie.path,
+          expires: cookie.expirationDate || -1,
+          httpOnly: cookie.httpOnly,
+          secure: cookie.secure,
+          sameSite: cookie.sameSite === 'no_restriction' ? 'None' :
+                    cookie.sameSite === 'lax' ? 'Lax' :
+                    cookie.sameSite === 'strict' ? 'Strict' : 'Lax'
+        })));
+      }
+      log('info', `  Cookies: ${result.cookies.length}`);
+    }
+
+    // 2. Export localStorage and IndexedDB from matching tabs
+    if (site.needs.localStorage || site.needs.indexedDB) {
+      const tabs = await chrome.tabs.query({ url: site.tabPatterns });
+      log('info', `  Found ${tabs.length} matching tabs`);
+
+      for (const tab of tabs) {
+        if (!tab.id) continue;
+
+        try {
+          if (site.needs.localStorage) {
+            const lsResponse = await chrome.tabs.sendMessage(tab.id, { action: 'exportLocalStorage' });
+            if (lsResponse && lsResponse.data) {
+              result.localStorage.push(lsResponse);
+              log('info', `  localStorage from ${lsResponse.origin}: ${Object.keys(lsResponse.data).length} keys`);
+            }
+          }
+
+          if (site.needs.indexedDB) {
+            const idbResponse = await chrome.tabs.sendMessage(tab.id, { action: 'exportIndexedDB' });
+            if (idbResponse && idbResponse.databases) {
+              result.indexedDB.push(idbResponse);
+              log('info', `  IndexedDB from ${idbResponse.origin}: ${idbResponse.databases.length} databases`);
+            }
+          }
+        } catch (e) {
+          log('debug', `  Could not export from tab ${tab.url}: ${e.message}`);
+        }
+      }
+    }
+
+    // 3. Send to native host
+    const response = await chrome.runtime.sendNativeMessage(NATIVE_HOST_NAME, {
+      action: 'importSiteSession',
+      site: siteKey,
+      session: result
+    });
+
+    if (response && response.success) {
+      log('info', `Session exported for ${site.name}: ${response.message}`);
+      return {
+        success: true,
+        site: siteKey,
+        siteName: site.name,
+        cookies: result.cookies.length,
+        localStorage: result.localStorage.length,
+        indexedDB: result.indexedDB.length,
+        message: response.message
+      };
+    } else {
+      throw new Error(response?.error || 'Unknown error from native host');
+    }
+  } catch (error) {
+    log('error', `Session export failed for ${site.name}`, error.message);
+    return {
+      success: false,
+      site: siteKey,
+      siteName: site.name,
+      message: error.message
+    };
+  }
+}
+
+/**
+ * Export sessions for ALL configured sites
+ */
+async function exportAllSiteSessions() {
+  log('info', 'Exporting ALL site sessions...');
+
+  const results = {
+    success: true,
+    sites: {},
+    totalCookies: 0,
+    totalLocalStorage: 0,
+    totalIndexedDB: 0,
+    failed: []
+  };
+
+  for (const siteKey of Object.keys(SITES_CONFIG)) {
+    const result = await exportSiteSession(siteKey);
+    results.sites[siteKey] = result;
+
+    if (result.success) {
+      results.totalCookies += result.cookies || 0;
+      results.totalLocalStorage += result.localStorage || 0;
+      results.totalIndexedDB += result.indexedDB || 0;
+    } else {
+      results.failed.push(siteKey);
+    }
+  }
+
+  results.success = results.failed.length === 0;
+  results.message = `Exported ${Object.keys(SITES_CONFIG).length - results.failed.length}/${Object.keys(SITES_CONFIG).length} sites (${results.totalCookies} cookies, ${results.totalLocalStorage} localStorage, ${results.totalIndexedDB} IndexedDB)`;
+
+  log('info', results.message);
+  return results;
+}
+
+/**
+ * Get list of configured sites
+ */
+function getSitesConfig() {
+  return Object.entries(SITES_CONFIG).map(([key, config]) => ({
+    key,
+    name: config.name,
+    domains: config.domains,
+    needs: config.needs
+  }));
+}
+
+/**
  * Handle messages from content scripts and popup
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -441,6 +735,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.action === 'exportGoogleCookies') {
     exportGoogleCookies().then(sendResponse);
+    return true;
+  }
+
+  if (message.action === 'exportFullSession') {
+    exportFullSession(message.domains || ['.google.com', '.youtube.com']).then(sendResponse);
+    return true;
+  }
+
+  // New site-based export actions
+  if (message.action === 'getSitesConfig') {
+    sendResponse({ sites: getSitesConfig() });
+    return true;
+  }
+
+  if (message.action === 'exportSiteSession') {
+    exportSiteSession(message.siteKey).then(sendResponse);
+    return true;
+  }
+
+  if (message.action === 'exportAllSiteSessions') {
+    exportAllSiteSessions().then(sendResponse);
     return true;
   }
 

@@ -229,60 +229,130 @@ async function refreshRules() {
 }
 
 // Elements - Cookies
-const exportGoogleBtn = document.getElementById('exportGoogleBtn');
-const exportAllBtn = document.getElementById('exportAllBtn');
+const exportAllSitesBtn = document.getElementById('exportAllSitesBtn');
+const exportProgressEl = document.getElementById('exportProgress');
+const sitesListEl = document.getElementById('sitesList');
 const lastExportEl = document.getElementById('lastExport');
 const exportResultEl = document.getElementById('exportResult');
 
-async function exportGoogleCookies() {
-  exportGoogleBtn.disabled = true;
-  exportGoogleBtn.textContent = 'Exporting...';
-  exportResultEl.textContent = 'Working...';
-  exportResultEl.className = 'debug-value';
-
+/**
+ * Load and display sites configuration
+ */
+async function loadSitesConfig() {
   try {
-    const result = await chrome.runtime.sendMessage({ action: 'exportGoogleCookies' });
+    const result = await chrome.runtime.sendMessage({ action: 'getSitesConfig' });
+    const sites = result.sites || [];
 
-    if (result.success) {
-      lastExportEl.textContent = new Date().toLocaleTimeString();
-      exportResultEl.textContent = result.message || `Exported ${result.count} cookies`;
-      exportResultEl.className = 'debug-value success';
-    } else {
-      exportResultEl.textContent = result.message || 'Failed';
-      exportResultEl.className = 'debug-value error';
+    if (sites.length === 0) {
+      sitesListEl.innerHTML = '<div class="empty">No sites configured</div>';
+      return;
     }
+
+    sitesListEl.innerHTML = sites.map(site => `
+      <div class="rule" data-site-key="${escapeHtml(site.key)}">
+        <div class="rule-icon" style="background: #667eea;"></div>
+        <div class="rule-info">
+          <div class="rule-name">${escapeHtml(site.name)}</div>
+          <div class="rule-pattern">${escapeHtml(site.domains.slice(0, 2).join(', '))}</div>
+        </div>
+        <button class="debug-btn export-site-btn" data-site-key="${escapeHtml(site.key)}" style="margin: 0; padding: 3px 8px;">
+          Export
+        </button>
+      </div>
+    `).join('');
+
+    // Add click handlers
+    sitesListEl.querySelectorAll('.export-site-btn').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        const siteKey = e.target.dataset.siteKey;
+        await exportSiteSession(siteKey, e.target);
+      });
+    });
   } catch (error) {
-    exportResultEl.textContent = error.message;
-    exportResultEl.className = 'debug-value error';
-  } finally {
-    exportGoogleBtn.disabled = false;
-    exportGoogleBtn.textContent = 'Export Google Cookies';
+    sitesListEl.innerHTML = `<div class="empty error">Error: ${error.message}</div>`;
   }
 }
 
-async function exportAllCookies() {
-  exportAllBtn.disabled = true;
-  exportAllBtn.textContent = 'Exporting...';
-  exportResultEl.textContent = 'Working...';
-  exportResultEl.className = 'debug-value';
+/**
+ * Export session for a specific site
+ */
+async function exportSiteSession(siteKey, button) {
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = '...';
 
   try {
-    const result = await chrome.runtime.sendMessage({ action: 'exportCookies', domains: [] });
+    const result = await chrome.runtime.sendMessage({
+      action: 'exportSiteSession',
+      siteKey: siteKey
+    });
 
     if (result.success) {
+      button.textContent = '✓';
+      button.style.background = '#3fb950';
       lastExportEl.textContent = new Date().toLocaleTimeString();
-      exportResultEl.textContent = result.message || `Exported ${result.count} cookies`;
+      exportResultEl.textContent = `${result.siteName}: ${result.cookies} cookies`;
       exportResultEl.className = 'debug-value success';
     } else {
+      button.textContent = '✗';
+      button.style.background = '#f85149';
       exportResultEl.textContent = result.message || 'Failed';
       exportResultEl.className = 'debug-value error';
     }
+
+    // Reset button after 2 seconds
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.style.background = '';
+      button.disabled = false;
+    }, 2000);
   } catch (error) {
+    button.textContent = '✗';
+    button.style.background = '#f85149';
+    exportResultEl.textContent = error.message;
+    exportResultEl.className = 'debug-value error';
+
+    setTimeout(() => {
+      button.textContent = originalText;
+      button.style.background = '';
+      button.disabled = false;
+    }, 2000);
+  }
+}
+
+/**
+ * Export ALL sites at once
+ */
+async function exportAllSites() {
+  exportAllSitesBtn.disabled = true;
+  exportAllSitesBtn.textContent = 'Exporting...';
+  exportProgressEl.style.display = 'block';
+  exportProgressEl.textContent = 'Starting export...';
+  exportResultEl.textContent = '';
+
+  try {
+    const result = await chrome.runtime.sendMessage({ action: 'exportAllSiteSessions' });
+
+    if (result.success) {
+      lastExportEl.textContent = new Date().toLocaleTimeString();
+      exportProgressEl.style.display = 'none';
+      exportResultEl.textContent = result.message;
+      exportResultEl.className = 'debug-value success';
+    } else {
+      exportProgressEl.style.display = 'none';
+      exportResultEl.textContent = `Partial: ${result.message}`;
+      exportResultEl.className = 'debug-value';
+      if (result.failed && result.failed.length > 0) {
+        exportResultEl.textContent += ` (Failed: ${result.failed.join(', ')})`;
+      }
+    }
+  } catch (error) {
+    exportProgressEl.style.display = 'none';
     exportResultEl.textContent = error.message;
     exportResultEl.className = 'debug-value error';
   } finally {
-    exportAllBtn.disabled = false;
-    exportAllBtn.textContent = 'Export All Cookies';
+    exportAllSitesBtn.disabled = false;
+    exportAllSitesBtn.textContent = '🚀 Export ALL Sites';
   }
 }
 
@@ -291,8 +361,16 @@ refreshBtn.addEventListener('click', refreshRules);
 testNativeBtn.addEventListener('click', testNativeConnection);
 loadLogBtn.addEventListener('click', loadDebugLog);
 clearLogBtn.addEventListener('click', clearDebugLog);
-exportGoogleBtn?.addEventListener('click', exportGoogleCookies);
-exportAllBtn?.addEventListener('click', exportAllCookies);
+exportAllSitesBtn?.addEventListener('click', exportAllSites);
+
+// Tab change handler - load sites when cookies tab is shown
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    if (tab.dataset.tab === 'cookies') {
+      loadSitesConfig();
+    }
+  });
+});
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local') updateUI();
@@ -300,3 +378,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 // Initial
 updateUI();
+// Load sites config if cookies tab is active
+if (document.querySelector('.tab[data-tab="cookies"]')?.classList.contains('active')) {
+  loadSitesConfig();
+}

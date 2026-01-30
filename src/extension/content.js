@@ -220,3 +220,102 @@ observer.observe(document.documentElement, {
   childList: true,
   subtree: true
 });
+
+/**
+ * Export localStorage for current origin
+ */
+function exportLocalStorage() {
+  const data = {};
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    data[key] = localStorage.getItem(key);
+  }
+  return {
+    origin: window.location.origin,
+    data: data
+  };
+}
+
+/**
+ * Export all IndexedDB databases for current origin
+ */
+async function exportIndexedDB() {
+  const result = {
+    origin: window.location.origin,
+    databases: []
+  };
+
+  try {
+    // Get list of databases (Chrome 126+)
+    if (indexedDB.databases) {
+      const dbList = await indexedDB.databases();
+
+      for (const dbInfo of dbList) {
+        try {
+          const db = await new Promise((resolve, reject) => {
+            const request = indexedDB.open(dbInfo.name, dbInfo.version);
+            request.onsuccess = () => resolve(request.result);
+            request.onerror = () => reject(request.error);
+          });
+
+          const dbData = {
+            name: dbInfo.name,
+            version: dbInfo.version,
+            stores: []
+          };
+
+          // Export each object store
+          for (const storeName of db.objectStoreNames) {
+            try {
+              const tx = db.transaction(storeName, 'readonly');
+              const store = tx.objectStore(storeName);
+              const records = await new Promise((resolve, reject) => {
+                const request = store.getAll();
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+              });
+
+              dbData.stores.push({
+                name: storeName,
+                records: records
+              });
+            } catch (e) {
+              console.warn(`[HydraSpecter] Failed to export store ${storeName}:`, e);
+            }
+          }
+
+          db.close();
+          result.databases.push(dbData);
+        } catch (e) {
+          console.warn(`[HydraSpecter] Failed to export DB ${dbInfo.name}:`, e);
+        }
+      }
+    }
+  } catch (e) {
+    console.error('[HydraSpecter] IndexedDB export failed:', e);
+  }
+
+  return result;
+}
+
+// Listen for storage export requests
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'rulesUpdated') {
+    injectedStyles.clear();
+    applyRules();
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.action === 'exportLocalStorage') {
+    sendResponse(exportLocalStorage());
+    return true;
+  }
+
+  if (message.action === 'exportIndexedDB') {
+    exportIndexedDB().then(sendResponse);
+    return true; // Keep channel open for async
+  }
+
+  return true;
+});

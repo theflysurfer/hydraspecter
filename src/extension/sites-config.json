@@ -1,0 +1,137 @@
+{
+  "description": "Sites requiring authentication for HydraSpecter - what each needs to stay logged in",
+  "sites": {
+    "google": {
+      "name": "Google (Gmail, Drive, Calendar, Docs, YouTube)",
+      "domains": [".google.com", ".youtube.com", ".googleapis.com"],
+      "tabPatterns": ["*://*.google.com/*", "*://mail.google.com/*", "*://accounts.google.com/*", "*://*.youtube.com/*"],
+      "needs": {
+        "cookies": true,
+        "localStorage": true,
+        "indexedDB": true,
+        "history": true
+      },
+      "notes": "Google uses all 3 storage types. Must have open Google tab to export localStorage/IndexedDB."
+    },
+    "homeexchange": {
+      "name": "HomeExchange",
+      "domains": [".homeexchange.com"],
+      "tabPatterns": ["*://*.homeexchange.com/*"],
+      "needs": {
+        "cookies": true,
+        "localStorage": true,
+        "indexedDB": false,
+        "history": false
+      },
+      "notes": "Session cookies + localStorage for filters/preferences."
+    },
+    "notion": {
+      "name": "Notion",
+      "domains": [".notion.so"],
+      "tabPatterns": ["*://*.notion.so/*"],
+      "needs": {
+        "cookies": true,
+        "localStorage": true,
+        "indexedDB": true,
+        "history": false
+      },
+      "notes": "Notion stores a lot in IndexedDB for offline support."
+    },
+    "amazon": {
+      "name": "Amazon",
+      "domains": [".amazon.fr", ".amazon.com", ".amazon.de", ".amazon.co.uk"],
+      "tabPatterns": ["*://*.amazon.fr/*", "*://*.amazon.com/*", "*://*.amazon.de/*"],
+      "needs": {
+        "cookies": true,
+        "localStorage": true,
+        "indexedDB": false,
+        "history": false
+      },
+      "notes": "Cart and wishlist persist via cookies + localStorage."
+    },
+    "github": {
+      "name": "GitHub",
+      "domains": [".github.com"],
+      "tabPatterns": ["*://*.github.com/*"],
+      "needs": {
+        "cookies": true,
+        "localStorage": true,
+        "indexedDB": false,
+        "history": false
+      },
+      "notes": "Session for private repos access."
+    },
+    "kiabi": {
+      "name": "Kiabi",
+      "domains": [".kiabi.com"],
+      "tabPatterns": ["*://*.kiabi.com/*"],
+      "needs": {
+        "cookies": true,
+        "localStorage": false,
+        "indexedDB": false,
+        "history": false
+      },
+      "notes": "Simple session cookies."
+    },
+    "temu": {
+      "name": "Temu",
+      "domains": [".temu.com"],
+      "tabPatterns": ["*://*.temu.com/*"],
+      "needs": {
+        "cookies": true,
+        "localStorage": true,
+        "indexedDB": false,
+        "history": false
+      },
+      "notes": "Cart and session via cookies."
+    },
+    "aliexpress": {
+      "name": "AliExpress",
+      "domains": [".aliexpress.com"],
+      "tabPatterns": ["*://*.aliexpress.com/*"],
+      "needs": {
+        "cookies": true,
+        "localStorage": true,
+        "indexedDB": false,
+        "history": false
+      },
+      "notes": "Cart and wishlist."
+    },
+    "discord": {
+      "name": "Discord",
+      "domains": [".discord.com"],
+      "tabPatterns": ["*://*.discord.com/*"],
+      "needs": {
+        "cookies": true,
+        "localStorage": true,
+        "indexedDB": true,
+        "history": false
+      },
+      "notes": "Discord uses IndexedDB for message cache."
+    },
+    "spotify": {
+      "name": "Spotify",
+      "domains": [".spotify.com"],
+      "tabPatterns": ["*://*.spotify.com/*"],
+      "needs": {
+        "cookies": true,
+        "localStorage": true,
+        "indexedDB": true,
+        "history": false
+      },
+      "notes": "Spotify web player uses IndexedDB."
+    }
+  },
+  "historyUrls": [
+    "https://www.google.com/search?q=weather",
+    "https://www.google.com/search?q=news",
+    "https://www.youtube.com/",
+    "https://www.amazon.fr/",
+    "https://github.com/",
+    "https://www.wikipedia.org/",
+    "https://stackoverflow.com/",
+    "https://www.reddit.com/",
+    "https://twitter.com/",
+    "https://www.linkedin.com/"
+  ]
+}
