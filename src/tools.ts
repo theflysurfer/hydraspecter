@@ -66,6 +66,7 @@ import { RateLimiter } from './utils/rate-limiter.js';
 import { resilientClick, DEFAULT_RESILIENCE, type ResilienceOptions } from './utils/click-resilience.js';
 import { getGlobalProfile, GlobalProfile, AllProfilesInUseError, switchToAuthProfile } from './global-profile.js';
 import { getDomainIntelligence, DomainIntelligence, requiresAuth } from './domain-intelligence.js';
+import { getBackendSelector } from './detection/index.js';
 import { getApiBookmarks } from './api-bookmarks.js';
 import { getJobManager } from './job-manager.js';
 import {
@@ -2528,16 +2529,27 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             }
           }
 
-          // Check if a stealth backend is requested
-          const requestedBackend = args.backend || 'auto';
+          // Check if a stealth backend is requested or auto-selected based on URL
+          let effectiveBackend = args.backend || 'auto';
           const stealthBackends = ['camoufox', 'seleniumbase'];
-          const needsStealthBackend = stealthBackends.includes(requestedBackend);
+          let needsStealthBackend = stealthBackends.includes(effectiveBackend);
 
-          // Use browserManager for isolated mode OR when a stealth backend is explicitly requested
+          // Auto-select backend based on URL rules (Cloudflare sites → camoufox)
+          if (effectiveBackend === 'auto' && args.url) {
+            const backendSelector = getBackendSelector();
+            const selectedBackend = backendSelector.selectBackend(args.url);
+            if (stealthBackends.includes(selectedBackend)) {
+              console.error(`[AUTO-SELECT] URL ${args.url} → backend ${selectedBackend} (auto-selected)`);
+              effectiveBackend = selectedBackend; // Use the auto-selected backend
+              needsStealthBackend = true;
+            }
+          }
+
+          // Use browserManager for isolated mode OR when a stealth backend is needed
           if (mode === 'isolated' || needsStealthBackend) {
             // Log when stealth backend forces browserManager path
             if (needsStealthBackend && mode !== 'isolated') {
-              console.error(`[STEALTH] Backend ${requestedBackend} requested with mode=${mode}, using browserManager with session persistence`);
+              console.error(`[STEALTH] Backend ${effectiveBackend} requested with mode=${mode}, using browserManager with session persistence`);
             }
             // Isolated mode: use BrowserManager (separate instance)
             let viewport = args.viewport || { width: 1280, height: 720 };
@@ -2552,13 +2564,13 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
             }
 
             // Slow backends that benefit from async mode to avoid MCP timeout
-            const isSlowBackend = stealthBackends.includes(requestedBackend);
+            const isSlowBackend = stealthBackends.includes(effectiveBackend);
             // Auto-enable async for slow backends unless explicitly disabled
             const useAsync = args.async === true || (args.async !== false && isSlowBackend);
 
             if (useAsync && isSlowBackend) {
               // Async mode: use JobManager to avoid MCP timeout
-              console.error(`[ASYNC] Creating ${requestedBackend} browser in background (async mode)`);
+              console.error(`[ASYNC] Creating ${effectiveBackend} browser in background (async mode)`);
 
               const jobManager = getJobManager();
               const job = jobManager.createJob<any>(
@@ -2574,7 +2586,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                       userAgent,
                       storageStatePath: args.storageStatePath,
                       url: args.url,
-                      backend: requestedBackend,
+                      backend: effectiveBackend,
                     },
                     args.metadata
                   );
@@ -2613,13 +2625,13 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
 
                   return {
                     instanceId: createResult.instanceId,
-                    backend: createResult.data?.backend || requestedBackend,
+                    backend: createResult.data?.backend || effectiveBackend,
                     url: args.url,
                     success: createResult.success,
                     error: createResult.error
                   };
                 },
-                { metadata: { url: args.url, backend: requestedBackend } }
+                { metadata: { url: args.url, backend: effectiveBackend } }
               );
 
               // Return immediately with job info
@@ -2628,7 +2640,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                 data: {
                   id: `job:${job.id}`, // Prefix to indicate this is a job, not an instance
                   mode: mode,
-                  backend: requestedBackend,
+                  backend: effectiveBackend,
                   jobId: job.id,
                   status: job.status,
                   progress: 'Starting browser creation...',
@@ -2646,7 +2658,7 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
                   storageStatePath: args.storageStatePath,
                   // Backend selection: pass URL for auto-detection, or explicit backend
                   url: args.url,
-                  backend: requestedBackend,
+                  backend: effectiveBackend,
                 },
                 args.metadata
               );

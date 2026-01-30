@@ -91,6 +91,47 @@ export class CamoufoxBackend implements IBrowserBackend {
 
   private instances: Map<string, { context: AnyContext | AnyBrowser; page: AnyPage; instance: BackendInstance }> = new Map();
 
+  // Path to save/restore session state (workaround for data_dir crash on Windows)
+  private stateFilePath = path.join(os.homedir(), '.hydraspecter', 'camoufox-state.json');
+
+  /**
+   * Load saved state from disk (cookies, localStorage, etc.)
+   */
+  private loadState(): { cookies?: any[]; origins?: any[] } | null {
+    try {
+      if (fs.existsSync(this.stateFilePath)) {
+        const content = fs.readFileSync(this.stateFilePath, 'utf-8');
+        const state = JSON.parse(content);
+        console.error(`[CamoufoxBackend] Loaded state with ${state.cookies?.length || 0} cookies`);
+        return state;
+      }
+    } catch (error) {
+      console.error(`[CamoufoxBackend] Failed to load state: ${error}`);
+    }
+    return null;
+  }
+
+  /**
+   * Save state to disk for persistence
+   */
+  private async saveState(context: AnyContext): Promise<void> {
+    try {
+      // Get storage state (cookies + localStorage)
+      const state = await context.storageState();
+
+      // Ensure directory exists
+      const dir = path.dirname(this.stateFilePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+
+      fs.writeFileSync(this.stateFilePath, JSON.stringify(state, null, 2), 'utf-8');
+      console.error(`[CamoufoxBackend] Saved state with ${state.cookies?.length || 0} cookies to ${this.stateFilePath}`);
+    } catch (error) {
+      console.error(`[CamoufoxBackend] Failed to save state: ${error}`);
+    }
+  }
+
   async isAvailable(): Promise<boolean> {
     try {
       const Camoufox = await loadCamoufox();
@@ -147,16 +188,29 @@ export class CamoufoxBackend implements IBrowserBackend {
       let context: AnyContext;
       let page: AnyPage;
 
+      // Load saved state for session persistence
+      const savedState = this.loadState();
+
       if ('newContext' in result) {
-        // It's a Browser
+        // It's a Browser - create context with saved state if available
         const browser = result as AnyBrowser;
-        context = await browser.newContext();
+        context = await browser.newContext(savedState ? { storageState: savedState } : undefined);
         page = await context.newPage();
       } else {
         // It's a BrowserContext (persistent)
         context = result as AnyContext;
         const pages = context.pages();
         page = pages.length > 0 ? pages[0] : await context.newPage();
+
+        // For persistent context, manually add cookies if we have saved state
+        if (savedState?.cookies?.length) {
+          try {
+            await context.addCookies(savedState.cookies);
+            console.error(`[CamoufoxBackend] Restored ${savedState.cookies.length} cookies to persistent context`);
+          } catch (e) {
+            console.error(`[CamoufoxBackend] Failed to restore cookies: ${e}`);
+          }
+        }
       }
 
       // Navigate to initial URL if provided
@@ -407,6 +461,18 @@ export class CamoufoxBackend implements IBrowserBackend {
       const stored = this.instances.get(instance.id);
       if (stored) {
         const ctx = stored.context;
+
+        // Save state before closing for persistence (workaround for data_dir crash)
+        // Get the actual context - if ctx is a Browser, get the context from stored.page
+        try {
+          const actualContext = stored.page?.context ? stored.page.context() : ctx;
+          if (actualContext && 'storageState' in actualContext) {
+            await this.saveState(actualContext);
+          }
+        } catch (saveError) {
+          console.error(`[CamoufoxBackend] Failed to save state before close: ${saveError}`);
+        }
+
         if ('close' in ctx) {
           await ctx.close();
         }

@@ -382,6 +382,73 @@ Rules are stored in `~/.hydraspecter/injection-rules.json`.
 
 ## Troubleshooting
 
+### Camoufox Session Persistence (Fixed 2026-01-30)
+
+**Problem**: Camoufox sessions weren't persisting between browser restarts on Windows.
+
+**Root Cause**: The `data_dir` option in camoufox-js causes a crash on Windows:
+```
+browserType.launchPersistentContext: Target page, context or browser has been closed
+```
+
+**Solution Implemented**: Manual `storageState` save/restore instead of `data_dir`:
+
+1. **On browser close** (`camoufox-backend.ts:close()`):
+   - Call `context.storageState()` to get all cookies + localStorage
+   - Save to `~/.hydraspecter/camoufox-state.json`
+
+2. **On browser create** (`camoufox-backend.ts:create()`):
+   - Load state from `camoufox-state.json` if exists
+   - Pass to `browser.newContext({ storageState: savedState })`
+   - Or call `context.addCookies(savedState.cookies)` for persistent context
+
+**Files Modified**:
+- `src/backends/camoufox-backend.ts` - Added `loadState()`, `saveState()` methods
+- `src/tools.ts` - Fixed auto-selection to actually use selected backend
+
+**Debug Steps if Broken Again**:
+1. Check if state file exists: `ls -la ~/.hydraspecter/camoufox-state.json`
+2. Check file size (should be >100KB after login): `wc -c camoufox-state.json`
+3. Check cookies count in file: `grep -c '"name":' camoufox-state.json`
+4. Look for errors in logs: `[CamoufoxBackend] Failed to save/load state`
+5. If state file is small (<10KB), cookies weren't saved - check `close()` was called
+
+**Known Limitations**:
+- Single camoufox profile (all AI sites share same session)
+- If you need multi-account, use different backends or manual cookie management
+
+### Auto-Selection Not Working (Fixed 2026-01-30)
+
+**Problem**: `browser({ action: "create", target: "https://chatgpt.com" })` was using Playwright instead of camoufox.
+
+**Root Cause**: In `tools.ts`, the auto-selection check was done but the result wasn't used:
+```typescript
+// BEFORE (broken)
+const requestedBackend = args.backend || 'auto';
+if (requestedBackend === 'auto' && args.url) {
+  const selectedBackend = backendSelector.selectBackend(args.url);
+  // selectedBackend was IGNORED! requestedBackend stayed 'auto'
+}
+```
+
+**Solution**: Use the auto-selected backend value:
+```typescript
+// AFTER (fixed)
+let effectiveBackend = args.backend || 'auto';
+if (effectiveBackend === 'auto' && args.url) {
+  const selectedBackend = backendSelector.selectBackend(args.url);
+  if (stealthBackends.includes(selectedBackend)) {
+    effectiveBackend = selectedBackend; // Now it's actually used!
+  }
+}
+```
+
+**Debug Steps if Broken Again**:
+1. Check backend rules exist: `browser({ action: "backend_rules" })`
+2. Look for log: `[AUTO-SELECT] URL https://chatgpt.com → backend camoufox`
+3. If log missing, check `getBackendSelector().selectBackend(url)` returns correct backend
+4. Verify MCP was restarted after code changes (or use `restart_server` action)
+
 ### Not logged in (session not synced)
 
 **Chrome v127+ uses App-Bound encryption (v20)** - cookies are tied to Chrome's identity and CANNOT be copied to Chromium/HydraSpecter.
@@ -476,7 +543,8 @@ In `~/.claude.json`:
 ```
 ~/.hydraspecter/
 ├── profiles/pool-{0-9}/     # 10 concurrent session pools (Playwright)
-├── camoufox-profile/        # Camoufox Firefox profile
+├── camoufox-profile/        # Camoufox Firefox profile (not used for persistence)
+├── camoufox-state.json      # Camoufox session state (cookies, localStorage) - THIS is the persistence
 ├── seleniumbase-profile/    # SeleniumBase Chrome profile
 ├── downloads/{pageId}/      # Persistent downloads per instance
 ├── domain-intelligence.json # Protection levels
