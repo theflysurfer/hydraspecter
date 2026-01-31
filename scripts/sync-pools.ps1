@@ -23,6 +23,7 @@ $ErrorActionPreference = "Stop"
 # Files to sync for anti-detection (makes browser look "lived in")
 $SyncFiles = @(
     @{ Src = "Default\Network\Cookies"; Required = $true },
+    @{ Src = "storage-state.json"; Required = $false },  # Playwright session state (fixes session cookie persistence)
     @{ Src = "Local State"; Required = $false },
     @{ Src = "Default\History"; Required = $false },
     @{ Src = "Default\Visited Links"; Required = $false },

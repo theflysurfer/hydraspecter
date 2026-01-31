@@ -307,6 +307,7 @@ export class BrowserManager {
         createdAt: new Date(),
         lastUsed: new Date(),
         isActive: true,
+        profileDir: config.userDataDir,  // Store for saving storageState on close
         ...(metadata && { metadata })
       };
 
@@ -451,7 +452,18 @@ export class BrowserManager {
         await adaptedInstance.backend.close(adaptedInstance.backendInstance);
         console.error(`[BrowserManager] Closed ${adaptedInstance.backendType} instance ${instanceId}`);
       } else {
-        // Standard Playwright instance
+        // Standard Playwright instance - save storageState before closing
+        // This fixes the Playwright bug where session cookies don't persist
+        // See: https://github.com/microsoft/playwright/issues/36139
+        if (instance.profileDir) {
+          try {
+            const storageStatePath = path.join(instance.profileDir, 'storage-state.json');
+            await instance.context.storageState({ path: storageStatePath });
+            console.error(`[BrowserManager] Saved storage state to ${storageStatePath}`);
+          } catch (saveError) {
+            console.error(`[BrowserManager] Failed to save storage state: ${saveError}`);
+          }
+        }
         await instance.browser.close();
       }
 

@@ -3676,6 +3676,21 @@ Use this to retrieve the complete endpoint data (URL, headers, body template) wh
           // Check if it's a global page or incognito first
           if (this.globalPages.has(args.instanceId)) {
             const page = this.globalPages.get(args.instanceId)!;
+
+            // Save storageState before closing page (fixes Playwright session cookie bug)
+            // See: https://github.com/microsoft/playwright/issues/36139
+            const profileDir = this.globalProfile.getProfileDir();
+            if (profileDir && !this.incognitoBrowsers.has(args.instanceId)) {
+              try {
+                const context = page.context();
+                const storageStatePath = path.join(profileDir, 'storage-state.json');
+                await context.storageState({ path: storageStatePath });
+                console.error(`[Tools] Saved storage state to ${storageStatePath}`);
+              } catch (saveError) {
+                console.error(`[Tools] Failed to save storage state: ${saveError}`);
+              }
+            }
+
             await page.close();
             this.globalPages.delete(args.instanceId);
 

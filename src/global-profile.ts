@@ -178,12 +178,19 @@ function syncCookiesViaSqlite(chromeCookiesPath: string, targetCookiesPath: stri
 
 /**
  * Convert Unix timestamp (seconds) to Chrome epoch (microseconds since 1601-01-01)
+ * For session cookies (expires <= 0), we set expiration to 1 year from now
+ * to persist them across browser restarts (fixes Playwright session cookie bug)
+ * See: https://github.com/microsoft/playwright/issues/36139
  */
 function unixToChrome(unixSeconds: number): bigint {
   // Chrome epoch: microseconds since January 1, 1601
   // Unix epoch: seconds since January 1, 1970
   // Difference: 11644473600 seconds
-  if (unixSeconds <= 0) return BigInt(0); // Session cookie
+  if (unixSeconds <= 0) {
+    // Session cookie - convert to persistent by setting expiry to 1 year from now
+    const oneYearFromNow = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60;
+    return BigInt(Math.floor((oneYearFromNow + 11644473600) * 1000000));
+  }
   return BigInt(Math.floor((unixSeconds + 11644473600) * 1000000));
 }
 
@@ -277,8 +284,10 @@ function injectCookiesIntoChromiumDb(profileDir: string, cookies: any[]): number
     const insertMany = db.transaction((cookiesList: any[]) => {
       for (const c of cookiesList) {
         const expiresUtc = unixToChrome(c.expires || 0);
-        const hasExpires = c.expires && c.expires > 0 ? 1 : 0;
-        const isPersistent = hasExpires;
+        // Session cookies (expires <= 0) are now converted to persistent with 1-year expiry
+        // so hasExpires and isPersistent should be 1 for all cookies
+        const hasExpires = 1;
+        const isPersistent = 1;
 
         // Normalize domain - Chromium uses host_key
         // ".example.com" for wildcard, "www.example.com" for exact
@@ -609,6 +618,7 @@ export class GlobalProfile {
   private headless: boolean;
   private channel?: 'chrome' | 'msedge';
   private preferredProfileId?: string;
+  private pendingCookies: any[] = [];  // Cookies to inject on first navigation
 
   constructor(options?: {
     headless?: boolean;
@@ -731,9 +741,18 @@ export class GlobalProfile {
       });
     });
 
-    // Note: Cookies are already injected into Chromium's SQLite database BEFORE launching
-    // (see injectCookiesIntoChromiumDb call above). We don't use context.addCookies() because
-    // it doesn't work reliably with persistent contexts.
+    // Store cookies for injection on first navigation
+    // Adding cookies immediately after launchPersistentContext doesn't work reliably
+    // because the persistent context may overwrite them
+    if (importedCookies.length > 0) {
+      // Convert session cookies to persistent (expires = 1 year from now)
+      const oneYearFromNow = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60;
+      this.pendingCookies = importedCookies.map(c => ({
+        ...c,
+        expires: c.expires && c.expires > 0 ? c.expires : oneYearFromNow
+      }));
+      console.error(`[GlobalProfile] Stored ${this.pendingCookies.length} cookies for injection on navigation`);
+    }
 
     // Inject localStorage restoration script for each origin
     // This will restore localStorage when navigating to matching origins
@@ -810,6 +829,25 @@ export class GlobalProfile {
       this.pages.delete(pageId);
     });
 
+    // Inject pending cookies before navigation (for session persistence)
+    if (this.pendingCookies.length > 0 && url) {
+      try {
+        // Filter cookies relevant to this URL's domain
+        const urlObj = new URL(url);
+        const relevantCookies = this.pendingCookies.filter(c => {
+          const cookieDomain = c.domain?.startsWith('.') ? c.domain.slice(1) : c.domain;
+          return urlObj.hostname.endsWith(cookieDomain || '') || urlObj.hostname === cookieDomain;
+        });
+
+        if (relevantCookies.length > 0) {
+          await context.addCookies(relevantCookies);
+          console.error(`[GlobalProfile] Injected ${relevantCookies.length} cookies for ${urlObj.hostname}`);
+        }
+      } catch (e) {
+        console.error(`[GlobalProfile] Failed to inject cookies: ${e}`);
+      }
+    }
+
     // Navigate if URL provided
     if (url) {
       await page.goto(url, { waitUntil: 'load' });
@@ -884,6 +922,19 @@ export class GlobalProfile {
    */
   async close(): Promise<void> {
     if (this.context) {
+      // Save storageState BEFORE closing to persist session cookies
+      // This fixes the Playwright bug where session cookies don't persist with launchPersistentContext
+      // See: https://github.com/microsoft/playwright/issues/36139
+      if (this.profileDir) {
+        try {
+          const storageStatePath = path.join(this.profileDir, 'storage-state.json');
+          await this.context.storageState({ path: storageStatePath });
+          console.error(`[GlobalProfile] Saved storage state to ${storageStatePath}`);
+        } catch (saveError) {
+          console.error(`[GlobalProfile] Failed to save storage state: ${saveError}`);
+        }
+      }
+
       await this.context.close();
       this.context = null;
       this.pages.clear();

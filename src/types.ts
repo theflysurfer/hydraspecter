@@ -11,6 +11,7 @@ export interface BrowserInstance {
   createdAt: Date;
   lastUsed: Date;
   isActive: boolean;
+  profileDir?: string;  // Profile directory for saving storageState on close
   metadata?: {
     name?: string;
     tags?: string[];
